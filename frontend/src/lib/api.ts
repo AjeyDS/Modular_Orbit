@@ -190,7 +190,7 @@ export interface CreateDocumentRequest {
   mime_type?: string
 }
 
-export type ChatMode = 'free' | 'context' | 'deep' | 'decision'
+export type ChatMode = 'fast' | 'understanding'
 
 export interface CaptureProposalPreview {
   id: string

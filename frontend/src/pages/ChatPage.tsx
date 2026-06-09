@@ -17,10 +17,8 @@ type ChatMessage =
   | { role: 'system'; content: string }
 
 const modes: Array<{ id: ChatMode; label: string; description: string }> = [
-  { id: 'context', label: 'Standard', description: 'Buckets, tools, and focused retrieval.' },
-  { id: 'free', label: 'Free', description: 'Plain conversation with fewer Orbit assumptions.' },
-  { id: 'deep', label: 'Deep', description: 'Broader retrieval for slower reasoning.' },
-  { id: 'decision', label: 'Decision', description: 'Decision posture with tradeoffs in view.' },
+  { id: 'understanding', label: 'Understanding', description: 'Reads your user model, then retrieves and synthesizes.' },
+  { id: 'fast', label: 'Fast', description: 'Direct answer from retrieved knowledge.' },
 ]
 
 const prompts = [
@@ -43,7 +41,7 @@ export default function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const urlSessionId = searchParams.get('session')
   const [sessionId, setSessionId] = useState(() => urlSessionId ?? crypto.randomUUID())
-  const [mode, setMode] = useState<ChatMode>('context')
+  const [mode, setMode] = useState<ChatMode>('understanding')
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sending, setSending] = useState(false)
@@ -52,14 +50,14 @@ export default function ChatPage() {
   const [acceptingProposal, setAcceptingProposal] = useState<string | null>(null)
   const greeting = useMemo(() => greetingFor(new Date().getHours()), [])
 
-  const decideMode = mode === 'decision'
+  const understandingMode = mode === 'understanding'
   const isEmpty = messages.length === 0 && !hydrating
 
   const resetChat = useCallback(() => {
     setMessages([])
     setDraft('')
     setSessionId(crypto.randomUUID())
-    setMode('context')
+    setMode('understanding')
     setPersistedRemotely(false)
     setSearchParams({}, { replace: true })
   }, [setSearchParams])
@@ -178,7 +176,7 @@ export default function ChatPage() {
           <EmptyState
             greeting={greeting}
             mode={mode}
-            decideMode={decideMode}
+            understandingMode={understandingMode}
             draft={draft}
             sending={sending}
             onModeChange={setMode}
@@ -199,7 +197,7 @@ export default function ChatPage() {
           <div className="shrink-0 pt-3">
             <Composer
               mode={mode}
-              decideMode={decideMode}
+              understandingMode={understandingMode}
               draft={draft}
               sending={sending}
               onModeChange={setMode}
@@ -216,7 +214,7 @@ export default function ChatPage() {
 function EmptyState({
   greeting,
   mode,
-  decideMode,
+  understandingMode,
   draft,
   sending,
   onModeChange,
@@ -226,7 +224,7 @@ function EmptyState({
 }: {
   greeting: string
   mode: ChatMode
-  decideMode: boolean
+  understandingMode: boolean
   draft: string
   sending: boolean
   onModeChange: (mode: ChatMode) => void
@@ -242,7 +240,7 @@ function EmptyState({
         </h1>
         <Composer
           mode={mode}
-          decideMode={decideMode}
+          understandingMode={understandingMode}
           draft={draft}
           sending={sending}
           onModeChange={onModeChange}
@@ -354,7 +352,7 @@ function ConversationView({
 
 function Composer({
   mode,
-  decideMode,
+  understandingMode,
   draft,
   sending,
   onModeChange,
@@ -364,7 +362,7 @@ function Composer({
   autoFocus = false,
 }: {
   mode: ChatMode
-  decideMode: boolean
+  understandingMode: boolean
   draft: string
   sending: boolean
   onModeChange: (mode: ChatMode) => void
@@ -389,7 +387,7 @@ function Composer({
   return (
     <div
       className={`relative rounded-2xl border bg-white shadow-sm transition-colors dark:bg-[#1E1E20] ${
-        decideMode
+        understandingMode
           ? 'border-violet-300 focus-within:border-violet-400 dark:border-violet-700 dark:focus-within:border-violet-500'
           : 'border-gray-200 focus-within:border-gray-300 dark:border-gray-700 dark:focus-within:border-gray-600'
       }`}
@@ -419,7 +417,7 @@ function Composer({
           aria-label="Send"
           className={`rounded-lg p-1.5 transition-[color,transform,background-color] duration-150 ease-out ${
             draft.trim()
-              ? decideMode
+              ? understandingMode
                 ? 'bg-violet-500 text-white hover:bg-violet-600 active:scale-[0.97]'
                 : 'bg-blue-500 text-white hover:bg-blue-600 active:scale-[0.97]'
               : 'cursor-default bg-gray-100 text-gray-300 dark:bg-gray-800 dark:text-gray-600'
@@ -459,7 +457,7 @@ function ModePicker({ mode, onChange }: { mode: ChatMode; onChange: (mode: ChatM
         type="button"
         onClick={() => setOpen((value) => !value)}
         className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium transition-colors ${
-          mode === 'decision'
+          mode === 'understanding'
             ? 'text-violet-600 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950/30'
             : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'
         }`}
@@ -492,7 +490,7 @@ function ModePicker({ mode, onChange }: { mode: ChatMode; onChange: (mode: ChatM
                 }`}
               >
                 <div className="min-w-0 flex-1">
-                  <p className={`text-[13px] font-medium ${item.id === 'decision' ? 'text-violet-600 dark:text-violet-300' : 'text-gray-900 dark:text-gray-100'}`}>
+                  <p className={`text-[13px] font-medium ${item.id === 'understanding' ? 'text-violet-600 dark:text-violet-300' : 'text-gray-900 dark:text-gray-100'}`}>
                     {item.label}
                   </p>
                   <p className="mt-0.5 text-[11px] leading-4 text-gray-500 dark:text-gray-400">{item.description}</p>
