@@ -6,6 +6,13 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from uuid import UUID
 
+from app.modules.companion import (
+    CompanionMessageResponse,
+    CompanionState,
+    end_companion_session,
+    get_companion_state,
+    send_companion_message,
+)
 from app.modules.curious import (
     CuriousAnswerCreate,
     CuriousCompletion,
@@ -27,6 +34,10 @@ router = APIRouter(prefix="/modules/curious", tags=["curious"])
 
 class CuriousCompleteRequest(BaseModel):
     session_id: UUID
+
+
+class CompanionMessageRequest(BaseModel):
+    message: str
 
 
 @router.get("/onboarding", response_model=CuriousOnboardingState)
@@ -72,3 +83,18 @@ def complete_onboarding_endpoint(payload: CuriousCompleteRequest) -> CuriousComp
         return complete_onboarding_session(payload.session_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/companion/state", response_model=CompanionState)
+def get_companion_state_endpoint() -> CompanionState:
+    return get_companion_state()
+
+
+@router.post("/companion/message", response_model=CompanionMessageResponse)
+def send_companion_message_endpoint(payload: CompanionMessageRequest) -> CompanionMessageResponse:
+    return send_companion_message(payload.message)
+
+
+@router.post("/companion/end", response_model=CuriousWeaveResult)
+def end_companion_session_endpoint() -> CuriousWeaveResult:
+    return end_companion_session()

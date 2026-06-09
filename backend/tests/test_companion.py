@@ -277,6 +277,30 @@ def test_due_check_off_when_frequency_zero(tmp_path, monkeypatch) -> None:
     assert companion.prepare_due_checkin() is None
 
 
+def test_companion_http_send_and_state(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    _ready_companion(tmp_path)
+    client = TestClient(app)
+
+    state = client.get("/api/modules/curious/companion/state")
+    assert state.status_code == 200
+    assert "messages" in state.json()
+
+    sent = client.post(
+        "/api/modules/curious/companion/message",
+        json={"message": "My EAD card was approved today"},
+    )
+    assert sent.status_code == 200
+    body = sent.json()
+    assert body["reply"]["message"]
+
+    state2 = client.get("/api/modules/curious/companion/state")
+    assert any("EAD" in m.get("content", "") for m in state2.json()["messages"])
+
+
 def test_filler_user_turn_records_message_but_no_capture(tmp_path) -> None:
     from app.modules.companion import get_or_create_companion_session, record_user_turn
 

@@ -6,14 +6,52 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel, Field
 from psycopg.types.json import Jsonb
 
 from app.db import transaction
 from app.lifecycle import create_life_item
 from app.chat.actions import KNOWN_BUCKET_KEYS
 from app.llm import LLMUnavailable, generate_json, generate_text
-from app.modules.curious import _mark_session_lifecycle_not_needed, get_curious_page_state
+from app.modules.curious import (
+    CuriousWeaveResult,
+    _mark_session_lifecycle_not_needed,
+    get_curious_page_state,
+    weave_pending_curious_updates,
+)
 from app.user_model import list_goals
+
+
+class CompanionMessage(BaseModel):
+    id: UUID
+    role: str
+    content: str
+    meta: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class CompanionTimelineEntry(BaseModel):
+    id: UUID
+    text: str
+    captured_at: datetime
+
+
+class CompanionReply(BaseModel):
+    kind: str
+    message: str
+    quick_replies: list[dict[str, Any]] = Field(default_factory=list)
+    target_bucket_key: str | None = None
+
+
+class CompanionState(BaseModel):
+    messages: list[CompanionMessage]
+    timeline: list[CompanionTimelineEntry]
+    pending_checkin: CompanionMessage | None = None
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class CompanionMessageResponse(BaseModel):
+    reply: CompanionReply
 
 _FILLER = {
     "ok", "okay", "k", "thanks", "thank you", "thx", "yes", "no", "sure",
@@ -585,3 +623,112 @@ def _derive_title(text: str) -> str:
     if len(title) <= 80:
         return title
     return f"{title[:77].rstrip()}..."
+
+
+def get_companion_state() -> CompanionState:
+    prepare_due_checkin()
+    session = get_or_create_companion_session()
+    session_id = session["id"]
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, role, content, meta, created_at
+                FROM companion_messages
+                WHERE session_id = %s
+                ORDER BY created_at
+                """,
+                (session_id,),
+            )
+            message_rows = cur.fetchall()
+            cur.execute(
+                """
+                SELECT id, description, created_at
+                FROM life_items
+                WHERE item_type = 'curious_capture'
+                    AND payload ->> 'session_id' = %s
+                    AND lifecycle_status <> 'deleted'
+                ORDER BY created_at DESC
+                """,
+                (str(session_id),),
+            )
+            capture_rows = cur.fetchall()
+
+    messages = [
+        CompanionMessage(
+            id=row["id"],
+            role=row["role"],
+            content=row["content"],
+            meta=dict(row.get("meta") or {}),
+            created_at=row["created_at"],
+        )
+        for row in message_rows
+    ]
+    timeline = [
+        CompanionTimelineEntry(
+            id=row["id"],
+            text=row["description"],
+            captured_at=row["created_at"],
+        )
+        for row in capture_rows
+    ]
+    pending = _pending_checkin_message(session_id)
+
+    return CompanionState(
+        messages=messages,
+        timeline=timeline,
+        pending_checkin=pending,
+        settings=_companion_settings(),
+    )
+
+
+def send_companion_message(text: str) -> CompanionMessageResponse:
+    reply = respond_to_user_turn(text)
+    return CompanionMessageResponse(reply=CompanionReply(**reply))
+
+
+def end_companion_session() -> CuriousWeaveResult:
+    session = get_or_create_companion_session()
+    synthesize_companion_session(session["id"])
+    return weave_pending_curious_updates()
+
+
+def _pending_checkin_message(session_id: UUID | str) -> CompanionMessage | None:
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, role, content, meta, created_at
+                FROM companion_messages
+                WHERE session_id = %s
+                    AND role = 'assistant'
+                    AND meta ->> 'kind' = 'checkin'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            )
+            latest = cur.fetchone()
+            if latest is None:
+                return None
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM companion_messages
+                WHERE session_id = %s
+                    AND role = 'user'
+                    AND created_at > %s
+                """,
+                (session_id, latest["created_at"]),
+            )
+            if cur.fetchone()["c"] > 0:
+                return None
+
+    return CompanionMessage(
+        id=latest["id"],
+        role=latest["role"],
+        content=latest["content"],
+        meta=dict(latest.get("meta") or {}),
+        created_at=latest["created_at"],
+    )
