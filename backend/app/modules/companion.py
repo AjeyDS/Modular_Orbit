@@ -294,8 +294,11 @@ def _companion_settings() -> dict[str, Any]:
 
 _QUESTION_STYLE = (
     "Ask ONE small, concrete, conversational question, answerable in a few words or "
-    "more — never an essay prompt. Offer 2–4 short quick-reply options when natural; "
-    "the person can also type freely."
+    "more — never an essay prompt. "
+    "Each quick_reply label is a SHORT FIRST-PERSON answer THE PERSON might give to "
+    "your question (e.g. 'A side project', 'Mostly walking', 'For my career') — write "
+    "them in the person's voice. NEVER make a quick_reply a follow-up question or "
+    "anything in your own voice. Offer 2–4 when natural; the person can also type freely."
 )
 
 def generate_companion_question(exclude_bucket: str | None = None) -> dict[str, Any]:
