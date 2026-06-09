@@ -164,6 +164,36 @@ def test_think_llm_path(monkeypatch) -> None:
     assert "tasks" in plan.retrieval_hint
 
 
+def test_router_uses_retrieval_hint(monkeypatch) -> None:
+    import app.chat.actions as actions
+    from app.chat.actions import ThinkingPlan, _route_and_classify
+
+    captured: dict[str, str] = {}
+
+    def fake(prompt, *, system, **kwargs):
+        captured["prompt"] = prompt
+        return {
+            "breadth": "narrow",
+            "buckets": ["career"],
+            "modules": ["tasks"],
+            "expansion_terms": [],
+        }
+
+    monkeypatch.setattr(actions, "generate_json", fake)
+    _route_and_classify(
+        "help me",
+        ThinkingPlan("prioritize", "rank things", "focus on tasks and routines"),
+    )
+    assert "focus on tasks and routines" in captured["prompt"] or "prioritize" in captured["prompt"]
+
+
+def test_router_plan_optional_back_compat() -> None:
+    from app.chat.actions import _route_and_classify
+
+    decision = _route_and_classify("what tasks are overdue?")
+    assert "tasks" in decision.modules
+
+
 def test_advice_query_forces_actionable_modules() -> None:
     from app.chat.actions import _route_and_classify
 

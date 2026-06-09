@@ -1140,11 +1140,11 @@ def _think_fallback(message: str) -> ThinkingPlan:
     return ThinkingPlan("open", _DEFAULT_APPROACH, "")
 
 
-def _route_and_classify(message: str) -> RouteDecision:
+def _route_and_classify(message: str, plan: ThinkingPlan | None = None) -> RouteDecision:
     catalog = _bucket_catalog()
     try:
         data = generate_json(
-            _route_prompt(message, catalog),
+            _route_prompt(message, catalog, plan),
             system=(
                 "You route a personal-assistant query to the user's story buckets. "
                 "Return only JSON. breadth is 'narrow' for specific questions and "
@@ -1176,6 +1176,7 @@ def _route_and_classify(message: str) -> RouteDecision:
             expansion_terms=terms,
             modules=modules,
             rationale=str(data.get("rationale") or ""),
+            plan=plan,
         )
     except (LLMUnavailable, Exception):
         breadth = _breadth_fallback(message)
@@ -1186,6 +1187,7 @@ def _route_and_classify(message: str) -> RouteDecision:
             expansion_terms=[],
             modules=_modules_fallback(message),
             rationale="lexical fallback",
+            plan=plan,
         )
 
 
@@ -1207,8 +1209,14 @@ def _finalize_route_decision(
     expansion_terms: list[str],
     modules: list[str],
     rationale: str,
+    plan: ThinkingPlan | None = None,
 ) -> RouteDecision:
-    if _is_focus_query(message) or _is_advice_query(message):
+    should_union = (
+        _is_focus_query(message)
+        or _is_advice_query(message)
+        or (plan is not None and plan.question_type in {"prioritize", "gap_analysis"})
+    )
+    if should_union:
         modules = sorted(set(modules) | _ACTIONABLE_MODULES)
         breadth = "broad"
     return RouteDecision(
@@ -1292,9 +1300,20 @@ def _modules_fallback(message: str) -> list[str]:
     return modules
 
 
-def _route_prompt(message: str, catalog: list[dict[str, str]]) -> str:
+def _route_prompt(
+    message: str,
+    catalog: list[dict[str, str]],
+    plan: ThinkingPlan | None = None,
+) -> str:
     queryable = ", ".join(sorted(QUERYABLE_MODULES))
     lines = "\n".join(f"- {b['stable_key']}: {b['display_name']} — {b['description']}" for b in catalog)
+    plan_section = ""
+    if plan is not None:
+        plan_section = (
+            f"\n\nThinking plan:\n"
+            f"- question_type: {plan.question_type}\n"
+            f"- retrieval_hint: {plan.retrieval_hint}\n"
+        )
     return (
         "Buckets:\n" + lines + "\n\n"
         f"Queryable modules: {queryable}. Pick modules whose structured data would help answer "
@@ -1303,6 +1322,7 @@ def _route_prompt(message: str, catalog: list[dict[str, str]]) -> str:
         '"expansion_terms":["..."],"modules":["tasks|plans|goals|routines"],'
         '"rationale":"one line"}\n\n'
         f"Query:\n{message}"
+        + plan_section
     )
 
 
