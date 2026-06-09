@@ -51,12 +51,16 @@ def test_goal_crud_http() -> None:
 
 def test_update_goal_preserves_id() -> None:
     from app.user_model.goals import create_goal, update_goal
+    from datetime import date
 
-    g = create_goal(title="Learn Rust", body="x")
+    g = create_goal(title="Learn Rust", body="x", target_date=date(2026, 12, 1), target_note="by year end")
     u = update_goal(g.goal_id, title="Learn Rust deeply", body="y")
     assert u.goal_id == g.goal_id
     assert u.title == "Learn Rust deeply"
     assert u.body == "y"
+    cleared = update_goal(g.goal_id, target_date=None, target_note=None)
+    assert cleared.target_date is None
+    assert cleared.target_note is None
 
 
 def test_delete_goal_removes_only_target() -> None:

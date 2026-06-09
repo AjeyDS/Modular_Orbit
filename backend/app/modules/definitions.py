@@ -170,7 +170,7 @@ INITIAL_MODULES: tuple[ModuleDefinition, ...] = (
             default_chunk_status="not_needed",
             notes="Goals are read from structured markdown and targeted by stable goal IDs.",
         ),
-        suggestion_threshold=0.95,
+        suggestion_threshold=0.85,
         item_chat_enabled=False,
         frontend_blocks=(),
         default_settings={

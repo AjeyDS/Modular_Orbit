@@ -158,7 +158,7 @@ export default function LogsPage() {
                           log={log}
                           onArchive={async () => {
                             await archiveLog(log.id)
-                            await loadLogs()
+                            setLogs((current) => current.filter((item) => item.id !== log.id))
                           }}
                           onDelete={async () => {
                             if (!confirm('Delete this log entry?')) return

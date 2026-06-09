@@ -13,6 +13,7 @@ from app.user_model.paths import user_model_root
 
 
 GoalStatus = Literal["active", "tentative"]
+_UNSET = object()
 
 # Legacy markdown parsing — used once at seed time to lift existing goals.md into the DB.
 _LEGACY_GOAL_MARKER_RE = re.compile(r"<!--\s*goal:\s*([a-z][a-z0-9_-]*)\s*-->")
@@ -168,8 +169,8 @@ def update_goal(
     title: str | None = None,
     body: str | None = None,
     horizon: str | None = None,
-    target_date: date | None = None,
-    target_note: str | None = None,
+    target_date: date | None | object = _UNSET,
+    target_note: str | None | object = _UNSET,
 ) -> GoalEntry:
     sets: list[str] = []
     params: list[object] = []
@@ -182,10 +183,10 @@ def update_goal(
     if horizon is not None:
         sets.append("horizon = %s")
         params.append(horizon)
-    if target_date is not None:
+    if target_date is not _UNSET:
         sets.append("target_date = %s")
         params.append(target_date)
-    if target_note is not None:
+    if target_note is not _UNSET:
         sets.append("target_note = %s")
         params.append(target_note)
     if not sets:

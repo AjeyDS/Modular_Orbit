@@ -23,12 +23,15 @@ from app.user_model import (
 )
 
 
+GoalHorizon = Literal["short_term", "long_term"]
+
+
 class GoalItem(BaseModel):
     goal_id: str
     title: str
     body: str
     status: Literal["active", "tentative"]
-    horizon: str
+    horizon: GoalHorizon
     target_date: date | None = None
     target_note: str | None = None
 
@@ -36,7 +39,7 @@ class GoalItem(BaseModel):
 class GoalCreate(BaseModel):
     title: str = Field(min_length=1)
     body: str = ""
-    horizon: str = "long_term"
+    horizon: GoalHorizon = "long_term"
     target_date: date | None = None
     target_note: str | None = None
 
@@ -44,7 +47,7 @@ class GoalCreate(BaseModel):
 class GoalUpdate(BaseModel):
     title: str | None = None
     body: str | None = None
-    horizon: str | None = None
+    horizon: GoalHorizon | None = None
     target_date: date | None = None
     target_note: str | None = None
 
@@ -105,14 +108,18 @@ def create_goal_endpoint(payload: GoalCreate) -> GoalItem:
 @router.patch("/goals/{goal_id}", response_model=GoalItem)
 def update_goal_endpoint(goal_id: str, payload: GoalUpdate) -> GoalItem:
     try:
-        goal = update_goal(
-            goal_id,
-            title=payload.title,
-            body=payload.body,
-            horizon=payload.horizon,
-            target_date=payload.target_date,
-            target_note=payload.target_note,
-        )
+        kwargs: dict = {}
+        if payload.title is not None:
+            kwargs["title"] = payload.title
+        if payload.body is not None:
+            kwargs["body"] = payload.body
+        if payload.horizon is not None:
+            kwargs["horizon"] = payload.horizon
+        if "target_date" in payload.model_fields_set:
+            kwargs["target_date"] = payload.target_date
+        if "target_note" in payload.model_fields_set:
+            kwargs["target_note"] = payload.target_note
+        goal = update_goal(goal_id, **kwargs)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return _goal_item(goal)
