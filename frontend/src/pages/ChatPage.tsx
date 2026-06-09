@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArrowUp, Check, ChevronDown, Sparkles } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, FileText, FolderOpen, Layers, ScrollText, Sparkles } from 'lucide-react'
 import {
   confirmCaptureProposal,
   fetchChatMessages,
@@ -9,13 +9,15 @@ import {
   type CaptureProposalPreview,
   type ChatMessageItem,
   type ChatMode,
+  type SourceKind,
+  type SourceRef,
 } from '../lib/api'
 import { Markdown } from '../components/Markdown'
 import { pageContentClass } from '../layout/pageShell'
 import { chatSessionChangedEvent, newChatEvent } from '../layout/Sidebar'
 
 type ChatMessage =
-  | { role: 'assistant' | 'user'; content: string; suggestions?: CaptureProposalPreview[] }
+  | { role: 'assistant' | 'user'; content: string; suggestions?: CaptureProposalPreview[]; sources?: SourceRef[] }
   | { role: 'system'; content: string }
 
 const modes: Array<{ id: ChatMode; label: string; description: string }> = [
@@ -122,6 +124,7 @@ export default function ChatPage() {
     setMessages((current) => [...current, { role: 'user', content: message }])
     let answer = ''
     let suggestions: CaptureProposalPreview[] = []
+    let sources: SourceRef[] = []
     try {
       await streamChat(
         { session_id: sessionId, mode, message },
@@ -133,8 +136,9 @@ export default function ChatPage() {
             answer += delta
             setStreamingContent((current) => current + delta)
           },
-          onDone: (doneSuggestions) => {
+          onDone: ({ suggestions: doneSuggestions, sources: doneSources }) => {
             suggestions = doneSuggestions
+            sources = doneSources
           },
         },
       )
@@ -144,6 +148,7 @@ export default function ChatPage() {
           role: 'assistant',
           content: answer,
           suggestions,
+          sources,
         },
       ])
       setPersistedRemotely(true)
@@ -160,6 +165,7 @@ export default function ChatPage() {
             role: 'assistant',
             content: response.answer,
             suggestions: response.suggestions,
+            sources: response.sources ?? [],
           },
         ])
         setPersistedRemotely(true)
@@ -191,6 +197,7 @@ export default function ChatPage() {
       role: item.role,
       content: item.content,
       suggestions: item.suggestions ?? undefined,
+      sources: item.sources ?? undefined,
     }
   }
 
@@ -358,6 +365,9 @@ function ConversationView({
               <Markdown>{message.content}</Markdown>
             ) : (
               <p className="whitespace-pre-wrap">{message.content}</p>
+            )}
+            {message.role === 'assistant' && message.sources && message.sources.length > 0 && (
+              <SourcesStrip sources={message.sources} />
             )}
             {'suggestions' in message && message.suggestions && message.suggestions.length > 0 && (
               <div className="mt-4 grid gap-2">
@@ -582,6 +592,34 @@ function ModePicker({ mode, onChange }: { mode: ChatMode; onChange: (mode: ChatM
       )}
     </div>
   )
+}
+
+function SourcesStrip({ sources }: { sources: SourceRef[] }) {
+  return (
+    <div className="mt-3 border-t border-gray-200/80 pt-3 dark:border-gray-700/80">
+      <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">Sources</p>
+      <div className="flex flex-wrap gap-1.5">
+        {sources.map((source) => (
+          <span
+            key={`${source.kind}-${source.label}`}
+            className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-gray-600 dark:border-gray-700 dark:bg-[#1C1C1E] dark:text-gray-400"
+            style={{ borderWidth: '0.5px' }}
+          >
+            <SourceIcon kind={source.kind} />
+            <span className="max-w-[12rem] truncate">{source.label}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SourceIcon({ kind }: { kind: SourceKind }) {
+  const className = 'shrink-0 text-gray-400 dark:text-gray-500'
+  if (kind === 'document') return <FileText size={11} className={className} />
+  if (kind === 'bucket') return <FolderOpen size={11} className={className} />
+  if (kind === 'module') return <Layers size={11} className={className} />
+  return <ScrollText size={11} className={className} />
 }
 
 function proposalLabel(proposal: CaptureProposalPreview) {

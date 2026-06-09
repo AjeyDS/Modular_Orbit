@@ -236,10 +236,18 @@ export interface CaptureProposalPreview {
   status: string
 }
 
+export type SourceKind = 'document' | 'item' | 'bucket' | 'module'
+
+export interface SourceRef {
+  kind: SourceKind
+  label: string
+}
+
 export interface ChatResponse {
   mode: ChatMode
   answer: string
   suggestions: CaptureProposalPreview[]
+  sources?: SourceRef[]
 }
 
 export interface ConfirmCaptureProposalResponse {
@@ -297,6 +305,7 @@ export interface ChatMessageItem {
   content: string
   mode: ChatMode | null
   suggestions: CaptureProposalPreview[] | null
+  sources?: SourceRef[] | null
   created_at: string
 }
 
@@ -714,10 +723,15 @@ export function respondToChat(payload: {
   })
 }
 
+export interface StreamChatDonePayload {
+  suggestions: CaptureProposalPreview[]
+  sources: SourceRef[]
+}
+
 export interface StreamChatHandlers {
   onStage?: (stage: string) => void
   onAnswerDelta?: (delta: string) => void
-  onDone?: (suggestions: CaptureProposalPreview[]) => void
+  onDone?: (payload: StreamChatDonePayload) => void
 }
 
 async function consumeSseStream(
@@ -745,11 +759,15 @@ async function consumeSseStream(
           stage?: string
           delta?: string
           suggestions?: CaptureProposalPreview[]
+          sources?: SourceRef[]
         }
         if (event.stage === 'answer' && event.delta) {
           handlers.onAnswerDelta?.(event.delta)
         } else if (event.stage === 'done') {
-          handlers.onDone?.(event.suggestions ?? [])
+          handlers.onDone?.({
+            suggestions: event.suggestions ?? [],
+            sources: event.sources ?? [],
+          })
         } else if (event.stage) {
           handlers.onStage?.(event.stage)
         }
@@ -796,7 +814,10 @@ export async function streamChat(
 
   const fallback = await respondToChat(payload)
   handlers.onAnswerDelta?.(fallback.answer)
-  handlers.onDone?.(fallback.suggestions)
+  handlers.onDone?.({
+    suggestions: fallback.suggestions,
+    sources: fallback.sources ?? [],
+  })
 }
 
 export function confirmCaptureProposal(proposalId: string): Promise<ConfirmCaptureProposalResponse> {
