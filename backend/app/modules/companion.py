@@ -240,6 +240,20 @@ def build_companion_context() -> str:
                 """
             )
             asked_keys = {row["bucket_key"] for row in cur.fetchall() if row["bucket_key"]}
+            cur.execute(
+                """
+                SELECT m.id AS module_id, li.item_type, li.title, li.created_at
+                FROM life_items li
+                JOIN module_instances mi ON mi.id = li.module_instance_id
+                JOIN modules m ON m.id = mi.module_id
+                WHERE m.id IN ('logs', 'tasks', 'plans', 'documents', 'routine')
+                    AND li.item_type NOT IN ('curious_session', 'curious_question')
+                    AND li.lifecycle_status <> 'deleted'
+                ORDER BY li.created_at DESC
+                LIMIT 12
+                """
+            )
+            recent_rows = cur.fetchall()
 
     if bucket_rows:
         lines = []
@@ -267,8 +281,23 @@ def build_companion_context() -> str:
     if asked_keys:
         sections.append("Already-asked bucket coverage: " + ", ".join(sorted(asked_keys)))
 
+    recent_block = ""
+    if recent_rows:
+        recent_block = "Recent activity:\n" + "\n".join(
+            f"- [{r['module_id']}] {r['title']}" for r in recent_rows
+        )
+
     context = "\n\n".join(sections)
-    return context[:2000]
+    if not recent_block:
+        return context[:2000]
+
+    reserved = len(recent_block) + 2
+    if reserved >= 2000:
+        return recent_block[:2000]
+    budget = 2000 - reserved
+    if len(context) > budget:
+        context = context[:budget]
+    return f"{context}\n\n{recent_block}" if context else recent_block
 
 
 def _companion_settings() -> dict[str, Any]:

@@ -154,6 +154,17 @@ def test_meaningful_turn_creates_log_not_curious_capture(tmp_path) -> None:
     assert any(m["role"] == "user" and "EAD" in m["content"] for m in messages)
 
 
+def test_context_includes_recent_activity(tmp_path) -> None:
+    from app.modules.companion import build_companion_context
+    from app.modules.logs import LogCreate, create_log
+
+    _ready_companion(tmp_path)
+    create_log(LogCreate(text="Submitted my OPT application today"), review=False)
+    ctx = build_companion_context()
+    assert "Recent activity" in ctx
+    assert "OPT" in ctx
+
+
 def test_companion_context_includes_buckets_and_goals(tmp_path) -> None:
     from app.modules.companion import build_companion_context
 
