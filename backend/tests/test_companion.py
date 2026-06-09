@@ -174,6 +174,27 @@ def test_question_generation_falls_back_to_foundational_when_llm_down(tmp_path) 
     }
 
 
+def test_question_style_system_prompt(tmp_path, monkeypatch) -> None:
+    import app.modules.companion as companion
+
+    _ready_companion(tmp_path)
+    captured: dict[str, str] = {}
+
+    def fake(prompt, *, system, **k):
+        captured["system"] = system
+        return {
+            "opening_message": "What's been good lately?",
+            "target_bucket_key": "habits",
+            "quick_replies": [{"id": "a", "label": "Work"}],
+            "rationale": "light",
+        }
+
+    monkeypatch.setattr(companion, "generate_json", fake)
+    q = companion.generate_companion_question(exclude_bucket=None)
+    assert "conversational" in captured["system"].lower() or "short" in captured["system"].lower()
+    assert q["quick_replies"]
+
+
 def test_question_generation_uses_llm_when_available(tmp_path, monkeypatch) -> None:
     _ready_companion(tmp_path)
     import app.modules.companion as companion

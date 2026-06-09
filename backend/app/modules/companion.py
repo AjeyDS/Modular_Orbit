@@ -298,19 +298,32 @@ def _companion_settings() -> dict[str, Any]:
     return {**defaults, **instance}
 
 
-def generate_companion_question() -> dict[str, Any]:
+_QUESTION_STYLE = (
+    "Ask ONE small, concrete, conversational question, answerable in a few words or "
+    "more — never an essay prompt. Offer 2–4 short quick-reply options when natural; "
+    "the person can also type freely."
+)
+
+
+def generate_companion_question(exclude_bucket: str | None = None) -> dict[str, Any]:
     settings = _companion_settings()
     persona = build_persona_prompt(
         preset=str(settings.get("companion_persona_preset", "warm")),
         override=str(settings.get("companion_persona_override", "")),
     )
+    system_parts = [persona, _QUESTION_STYLE]
+    if exclude_bucket:
+        system_parts.append(
+            f"Do not target the '{exclude_bucket}' bucket; choose a different area."
+        )
+    system = "\n\n".join(system_parts)
     context = build_companion_context()
     try:
         data = generate_json(
             f"Context:\n{context}\n\n"
             'Return JSON: {"opening_message":"...", "target_bucket_key":"...", '
             '"quick_replies":[{"id":"...","label":"..."}], "rationale":"..."}',
-            system=persona,
+            system=system,
             temperature=0.3,
             max_output_tokens=400,
         )
@@ -330,7 +343,7 @@ def generate_companion_question() -> dict[str, Any]:
             "rationale": str(data.get("rationale") or ""),
         }
     except (LLMUnavailable, Exception):
-        return _foundational_question_fallback()
+        return _foundational_question_fallback(exclude_bucket=exclude_bucket)
 
 
 def respond_to_user_turn(text: str) -> dict[str, Any]:
@@ -647,19 +660,24 @@ def synthesize_companion_session(session_id: UUID | str) -> None:
             )
 
 
-def _foundational_question_fallback() -> dict[str, Any]:
+def _foundational_question_fallback(
+    *, exclude_bucket: str | None = None
+) -> dict[str, Any]:
     page_state = get_curious_page_state()
     if page_state.pending_questions:
-        question = page_state.pending_questions[0].question
-        return {
-            "opening_message": question.question_text,
-            "target_bucket_key": question.target_bucket_key,
-            "quick_replies": [
-                {"id": option.id, "label": option.label}
-                for option in question.options
-            ],
-            "rationale": "foundational fallback",
-        }
+        for pending in page_state.pending_questions:
+            question = pending.question
+            if exclude_bucket and question.target_bucket_key == exclude_bucket:
+                continue
+            return {
+                "opening_message": question.question_text,
+                "target_bucket_key": question.target_bucket_key,
+                "quick_replies": [
+                    {"id": option.id, "label": option.label}
+                    for option in question.options
+                ],
+                "rationale": "foundational fallback",
+            }
     return {
         "opening_message": "How are things going today?",
         "target_bucket_key": "who_am_i",
