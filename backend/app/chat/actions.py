@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from collections.abc import Iterator
 from typing import Any, Literal
 from uuid import UUID
 
@@ -11,7 +12,7 @@ from pydantic import BaseModel, Field
 from psycopg.types.json import Jsonb
 
 from app.db import transaction
-from app.llm import LLMUnavailable, generate_json, generate_text
+from app.llm import LLMUnavailable, generate_json, generate_text, generate_text_stream
 from app.modules.documents import DocumentCreate, create_document
 from app.modules.logs import LogCreate, create_log
 from app.modules.plans import PlanCreate, PlanStepCreate, create_plan
@@ -148,6 +149,89 @@ def respond_to_chat(request: ChatRequest) -> ChatResponse:
         answer=answer,
         suggestions=suggestions,
     )
+
+
+def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
+    """Stream pipeline stage events, answer deltas, and a final done event."""
+    from app.chat.sessions import (
+        insert_chat_message,
+        truncate_for_title,
+        upsert_session_for_message,
+    )
+
+    with transaction() as conn:
+        upsert_session_for_message(
+            conn,
+            request.session_id,
+            initial_title=truncate_for_title(request.message),
+        )
+        insert_chat_message(
+            conn,
+            session_id=request.session_id,
+            role="user",
+            content=request.message,
+            mode=request.mode,
+        )
+
+    detected = _detect_capture_proposals(request.message)
+    suggestions = [
+        _persist_preview(request.session_id, proposal)
+        for proposal in detected
+        if _should_surface(request.session_id, proposal)
+    ]
+
+    if request.mode == "understanding":
+        yield {"stage": "routing"}
+        decision = _route_and_classify(request.message)
+        yield {"stage": "retrieving"}
+        chunks = _understanding_retrieval(
+            request.message,
+            decision,
+            limit=8 if decision.breadth == "broad" else 4,
+        )
+        yield {"stage": "reading_story"}
+        context = _build_understanding_context(request.message, decision, chunks)
+    else:
+        yield {"stage": "retrieving"}
+        context = _build_answer_context(request.mode, request.message)
+
+    yield {"stage": "writing"}
+    system = _chat_system_prompt(request.mode)
+    prompt = _answer_prompt(request, context, suggestions)
+    answer_parts: list[str] = []
+    try:
+        for delta in generate_text_stream(
+            prompt,
+            system=system,
+            temperature=0.45,
+            max_output_tokens=2200 if request.mode == "understanding" else 1300,
+        ):
+            answer_parts.append(delta)
+            yield {"stage": "answer", "delta": delta}
+        answer = "".join(answer_parts)
+    except (LLMUnavailable, Exception):
+        answer = _fallback_context_answer(request.mode, context, bool(suggestions))
+        yield {"stage": "answer", "delta": answer}
+
+    suggestions_json: list[dict[str, Any]] | None
+    if suggestions:
+        suggestions_json = [proposal.model_dump(mode="json") for proposal in suggestions]
+    else:
+        suggestions_json = None
+
+    with transaction() as conn:
+        insert_chat_message(
+            conn,
+            session_id=request.session_id,
+            role="assistant",
+            content=answer,
+            suggestions=suggestions_json,
+        )
+
+    yield {
+        "stage": "done",
+        "suggestions": suggestions_json or [],
+    }
 
 
 def confirm_capture_proposal(request: ConfirmCaptureProposalRequest) -> ConfirmCaptureProposalResponse:
@@ -490,17 +574,16 @@ def _mode_answer(mode: ChatMode, has_suggestion: bool) -> str:
     return f"LLM is unavailable, so Understanding Chat can only report routed context right now.{suffix}"
 
 
-def _generate_chat_answer(
+def _answer_prompt(
     request: ChatRequest,
+    context: str,
     suggestions: list[CaptureProposalPreview],
 ) -> str:
-    context = _build_answer_context(request.mode, request.message)
-    system = _chat_system_prompt(request.mode)
     suggestion_context = "\n".join(
         f"- {proposal.module_id}: {proposal.title} ({proposal.confidence_bucket})"
         for proposal in suggestions
     ) or "None"
-    prompt = f"""
+    return f"""
 User message:
 {request.message}
 
@@ -517,6 +600,15 @@ Answer naturally as Orbit. If context is missing, say so plainly. Do not claim
 that chat itself was stored as memory. If previews exist, briefly mention that
 the user can save the preview; do not pressure them.
 """.strip()
+
+
+def _generate_chat_answer(
+    request: ChatRequest,
+    suggestions: list[CaptureProposalPreview],
+) -> str:
+    context = _build_answer_context(request.mode, request.message)
+    system = _chat_system_prompt(request.mode)
+    prompt = _answer_prompt(request, context, suggestions)
     try:
         return generate_text(
             prompt,
@@ -577,6 +669,12 @@ def _build_answer_context(mode: ChatMode, message: str) -> str:
 
     decision = _route_and_classify(message)
     chunks = _understanding_retrieval(message, decision, limit=8 if decision.breadth == "broad" else 4)
+    return _build_understanding_context(message, decision, chunks)
+
+
+def _build_understanding_context(
+    message: str, decision: RouteDecision, chunks: list
+) -> str:
     chunk_block = _chunks_to_context(chunks)
     sections = [
         chunk_block,
