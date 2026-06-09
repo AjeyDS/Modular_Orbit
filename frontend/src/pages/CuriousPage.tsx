@@ -53,6 +53,13 @@ export default function CuriousPage() {
     void load()
   }, [])
 
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`
+  }, [draft])
+
   const clearIdleWeave = useCallback(() => {
     if (idleTimerRef.current !== null) {
       window.clearTimeout(idleTimerRef.current)
@@ -345,8 +352,8 @@ export default function CuriousPage() {
                     }
                   }}
                   placeholder="Share an update or answer…"
-                  className="w-full resize-none overflow-y-auto bg-transparent px-4 pt-3 text-[14px] text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
-                  style={{ maxHeight: '140px' }}
+                  className="w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-[14px] leading-6 text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
+                  style={{ maxHeight: '140px', minHeight: '2.75rem' }}
                 />
                 <div className="flex items-center justify-end px-3 pb-2 pt-1">
                   <button

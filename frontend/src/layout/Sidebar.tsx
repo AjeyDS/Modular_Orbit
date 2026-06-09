@@ -65,7 +65,7 @@ export function Sidebar({ enabledModules }: { enabledModules: ModuleInstanceItem
   }
 
   return (
-    <aside className="flex h-[calc(100vh-3rem)] flex-col border-r border-gray-200 bg-white/70 px-3 py-4 dark:border-gray-800 dark:bg-gray-900/35 lg:px-4">
+    <aside className="sticky top-12 flex h-[calc(100vh-3rem)] shrink-0 flex-col self-start border-r border-gray-200 bg-white/70 px-3 py-4 dark:border-gray-800 dark:bg-gray-900/35 lg:px-4">
       <div className="mb-4 flex items-center rounded-lg bg-gray-100 p-0.5 dark:bg-gray-800">
         {(['chat', 'modules'] as const).map((value) => {
           const active = tab === value

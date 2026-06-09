@@ -208,7 +208,7 @@ function LogComposer({
 
   return (
     <div
-      className="rounded-xl border border-gray-200 bg-white px-3 py-2 transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
+      className="flex items-end gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
       style={{ borderWidth: '0.5px' }}
     >
       <textarea
@@ -217,28 +217,24 @@ function LogComposer({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Capture a log… (event, thought, observation, useful context)"
-        className="block w-full resize-none bg-transparent text-[14px] leading-6 text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
+        placeholder="Capture a log…"
+        className="min-w-0 flex-1 resize-none bg-transparent py-1 text-[14px] leading-6 text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
+        style={{ maxHeight: '140px' }}
       />
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <p className="text-[11px] text-gray-400 dark:text-gray-500">
-          ⌘/Ctrl + Enter to capture
-        </p>
-        <button
-          type="button"
-          disabled={saving || !value.trim()}
-          onClick={onSubmit}
-          className="rounded-lg bg-blue-500 px-3 py-1.5 text-[12px] font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
-        >
-          {saving ? 'Capturing…' : 'Capture'}
-        </button>
-      </div>
+      <button
+        type="button"
+        disabled={saving || !value.trim()}
+        onClick={onSubmit}
+        className="shrink-0 rounded-lg bg-blue-500 px-3 py-1.5 text-[12px] font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+      >
+        {saving ? 'Capturing…' : 'Capture'}
+      </button>
     </div>
   )
 }
 
 function EmptyLogsState() {
-  const copy = { title: 'Nothing captured yet.', body: 'Drop your first thought above. Cmd+Enter saves it.' }
+  const copy = { title: 'Nothing captured yet.', body: 'Drop your first thought above.' }
   return (
     <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-6 py-10 text-center dark:border-gray-700 dark:bg-[#18181A]">
       <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-gray-400 dark:bg-gray-800 dark:text-gray-500">
