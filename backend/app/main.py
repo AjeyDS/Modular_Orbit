@@ -13,6 +13,7 @@ from app.api.item_chat import router as item_chat_router
 from app.api.logs import router as logs_router
 from app.api.output_modules import router as output_modules_router
 from app.api.plans import router as plans_router
+from app.api.routine import router as routine_router
 from app.api.shell import router as shell_router
 from app.api.story_weave import router as story_weave_router
 from app.api.tasks import router as tasks_router
@@ -40,6 +41,7 @@ app.include_router(item_chat_router)
 app.include_router(logs_router)
 app.include_router(output_modules_router)
 app.include_router(plans_router)
+app.include_router(routine_router)
 app.include_router(shell_router)
 app.include_router(story_weave_router)
 app.include_router(tasks_router)
@@ -53,6 +55,7 @@ for router in (
     logs_router,
     output_modules_router,
     plans_router,
+    routine_router,
     shell_router,
     story_weave_router,
     tasks_router,

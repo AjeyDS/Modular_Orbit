@@ -168,6 +168,7 @@ def update_goal(
     *,
     title: str | None = None,
     body: str | None = None,
+    status: GoalStatus | None = None,
     horizon: str | None = None,
     target_date: date | None | object = _UNSET,
     target_note: str | None | object = _UNSET,
@@ -180,6 +181,9 @@ def update_goal(
     if body is not None:
         sets.append("body = %s")
         params.append(body)
+    if status is not None:
+        sets.append("status = %s")
+        params.append(status)
     if horizon is not None:
         sets.append("horizon = %s")
         params.append(horizon)

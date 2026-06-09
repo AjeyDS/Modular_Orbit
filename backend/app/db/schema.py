@@ -146,6 +146,28 @@ def ensure_schema() -> None:
 
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS routine_items (
+                    life_item_id UUID PRIMARY KEY REFERENCES life_items(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS routine_completions (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    routine_life_item_id UUID NOT NULL REFERENCES life_items(id) ON DELETE CASCADE,
+                    completed_on DATE NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (routine_life_item_id, completed_on)
+                )
+                """
+            )
+
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS document_items (
                     life_item_id UUID PRIMARY KEY REFERENCES life_items(id) ON DELETE CASCADE,
                     unique_name TEXT NOT NULL UNIQUE
@@ -512,6 +534,10 @@ def ensure_schema() -> None:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_task_priority_suggestion_runs_status_created "
                 "ON task_priority_suggestion_runs(status, created_at DESC)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_routine_completions_item_date "
+                "ON routine_completions(routine_life_item_id, completed_on DESC)"
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_document_items_unique_name ON document_items(unique_name)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_plan_steps_life_item ON plan_steps(life_item_id)")

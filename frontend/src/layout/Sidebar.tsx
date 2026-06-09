@@ -6,6 +6,7 @@ import {
   Check,
   CircleHelp,
   FileText,
+  Flame,
   ListTodo,
   MessageCircle,
   NotebookTabs,
@@ -380,6 +381,7 @@ function modulePath(moduleId: string) {
 
 function moduleIcon(moduleId: string) {
   if (moduleId === 'tasks') return <ListTodo size={15} />
+  if (moduleId === 'routine') return <Flame size={15} />
   if (moduleId === 'plans') return <NotebookTabs size={15} />
   if (moduleId === 'documents') return <FileText size={15} />
   if (moduleId === 'logs') return <ScrollText size={15} />

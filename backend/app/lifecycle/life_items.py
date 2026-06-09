@@ -334,6 +334,19 @@ def _insert_side_table_row(
             )
             return
 
+        if module["side_table"] == "routine_items":
+            cur.execute(
+                """
+                INSERT INTO routine_items (life_item_id, position)
+                VALUES (%s, %s)
+                """,
+                (
+                    life_item_id,
+                    side_table_data.get("position", 0),
+                ),
+            )
+            return
+
         if module["side_table"] == "plan_items":
             cur.execute(
                 """

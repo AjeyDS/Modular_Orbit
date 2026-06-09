@@ -672,32 +672,6 @@ function TaskRow({
                 rewritten
               </span>
             )}
-            {task.lifecycle_status === 'active' ? (
-              <DueWindowPicker
-                dueWindow={dueWindow}
-                dueDate={dueDate}
-                onDueWindowChange={(nextWindow) => {
-                  if (nextWindow === 'exact') {
-                    setDueWindow(nextWindow)
-                    return
-                  }
-                  void saveDue(nextWindow, '')
-                }}
-                onDueDateChange={(nextDate) => {
-                  void saveDue('exact', nextDate)
-                }}
-              />
-            ) : (
-              <span
-                className={
-                  task.due_window === 'exact' && task.due_date === todayISO
-                    ? 'font-medium text-blue-500 dark:text-blue-400'
-                    : ''
-                }
-              >
-                {dueWindowButtonLabel(task.due_window, task.due_date, todayISO)}
-              </span>
-            )}
             <AsyncStatusPills connection={task.connection_status} chunk={task.chunk_status} bucketUpdate={task.bucket_update_status} />
           </div>
           {expanded && task.description && (
@@ -727,7 +701,33 @@ function TaskRow({
             </p>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 self-start pt-0.5">
+          {task.lifecycle_status === 'active' ? (
+            <DueWindowPicker
+              dueWindow={dueWindow}
+              dueDate={dueDate}
+              onDueWindowChange={(nextWindow) => {
+                if (nextWindow === 'exact') {
+                  setDueWindow(nextWindow)
+                  return
+                }
+                void saveDue(nextWindow, '')
+              }}
+              onDueDateChange={(nextDate) => {
+                void saveDue('exact', nextDate)
+              }}
+            />
+          ) : (
+            <span
+              className={`text-[12px] text-gray-400 ${
+                task.due_window === 'exact' && task.due_date === todayISO
+                  ? 'font-medium text-blue-500 dark:text-blue-400'
+                  : ''
+              }`}
+            >
+              {dueWindowButtonLabel(task.due_window, task.due_date, todayISO)}
+            </span>
+          )}
           <button
             type="button"
             onClick={async () => {

@@ -113,6 +113,34 @@ export interface CreateTaskRequest {
   module_status?: string | null
 }
 
+export interface RoutineItem {
+  id: string
+  title: string
+  description: string
+  lifecycle_status: Extract<LifecycleStatus, 'active' | 'archived' | 'deleted'>
+  connection_status: AsyncStepStatus
+  chunk_status: AsyncStepStatus
+  bucket_update_status: AsyncStepStatus
+  position: number
+  today_completed: boolean
+  streak_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface RoutineState {
+  date: string
+  total_count: number
+  completed_count: number
+  items: RoutineItem[]
+}
+
+export interface CreateRoutineRequest {
+  title: string
+  description?: string
+  position?: number
+}
+
 export interface PlanStepItem {
   id: string
   parent_step_id: string | null
@@ -238,6 +266,7 @@ export interface GoalItem {
 export interface GoalCreateRequest {
   title: string
   body?: string
+  status?: GoalStatus
   horizon?: GoalHorizon
   target_date?: string | null
   target_note?: string | null
@@ -246,6 +275,7 @@ export interface GoalCreateRequest {
 export interface GoalUpdateRequest {
   title?: string
   body?: string
+  status?: GoalStatus
   horizon?: GoalHorizon
   target_date?: string | null
   target_note?: string | null
@@ -536,6 +566,44 @@ export function revertTaskRewrite(taskId: string): Promise<TaskItem> {
 
 export function deleteTask(taskId: string): Promise<void> {
   return apiFetch<void>(`/modules/tasks/${taskId}`, { method: 'DELETE' })
+}
+
+export function fetchRoutineState(date: string): Promise<RoutineState> {
+  return apiFetch<RoutineState>(`/modules/routine?date=${encodeURIComponent(date)}`)
+}
+
+export function createRoutineItem(payload: CreateRoutineRequest): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>('/modules/routine', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateRoutineItem(
+  routineId: string,
+  payload: Partial<CreateRoutineRequest>,
+): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>(`/modules/routine/${routineId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function completeRoutineItem(routineId: string, date: string): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>(`/modules/routine/${routineId}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({ date }),
+  })
+}
+
+export function uncompleteRoutineItem(routineId: string, date: string): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>(`/modules/routine/${routineId}/complete?date=${encodeURIComponent(date)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function archiveRoutineItem(routineId: string): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>(`/modules/routine/${routineId}/archive`, { method: 'POST' })
 }
 
 export function fetchTaskPrioritySuggestion(): Promise<TaskPrioritySuggestionState> {

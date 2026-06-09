@@ -36,9 +36,13 @@ class GoalItem(BaseModel):
     target_note: str | None = None
 
 
+GoalStatus = Literal["active", "tentative"]
+
+
 class GoalCreate(BaseModel):
     title: str = Field(min_length=1)
     body: str = ""
+    status: GoalStatus = "tentative"
     horizon: GoalHorizon = "long_term"
     target_date: date | None = None
     target_note: str | None = None
@@ -47,6 +51,7 @@ class GoalCreate(BaseModel):
 class GoalUpdate(BaseModel):
     title: str | None = None
     body: str | None = None
+    status: GoalStatus | None = None
     horizon: GoalHorizon | None = None
     target_date: date | None = None
     target_note: str | None = None
@@ -98,6 +103,7 @@ def create_goal_endpoint(payload: GoalCreate) -> GoalItem:
     goal = create_goal(
         title=payload.title,
         body=payload.body,
+        status=payload.status,
         horizon=payload.horizon,
         target_date=payload.target_date,
         target_note=payload.target_note,
@@ -113,6 +119,8 @@ def update_goal_endpoint(goal_id: str, payload: GoalUpdate) -> GoalItem:
             kwargs["title"] = payload.title
         if payload.body is not None:
             kwargs["body"] = payload.body
+        if payload.status is not None:
+            kwargs["status"] = payload.status
         if payload.horizon is not None:
             kwargs["horizon"] = payload.horizon
         if "target_date" in payload.model_fields_set:
