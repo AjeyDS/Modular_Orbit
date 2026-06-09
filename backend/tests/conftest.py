@@ -42,7 +42,10 @@ def _truncate_mutable_tables() -> None:
                     plan_step_items,
                     plan_items,
                     document_items,
+                    routine_completions,
                     task_items,
+                    routine_items,
+                    companion_messages,
                     life_items,
                     module_settings,
                     module_instances

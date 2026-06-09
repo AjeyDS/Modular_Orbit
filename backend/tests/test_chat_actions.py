@@ -5,7 +5,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.chat import ChatRequest, ConfirmCaptureProposalRequest, confirm_capture_proposal, respond_to_chat
-from app.chat.actions import _build_answer_context
+from app.chat.actions import _build_answer_context, _detect_capture_proposals
 from app.db import connect, ensure_schema
 from app.main import app
 from app.modules.documents import DocumentCreate, create_document, remove_document
@@ -24,6 +24,47 @@ def _ready(tmp_path) -> None:
 
 def _session_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
+
+
+def test_questions_do_not_produce_capture_suggestions() -> None:
+    assert _detect_capture_proposals("what's my EAD start date?") == []
+    assert _detect_capture_proposals("when is my appointment?") == []
+
+
+def test_confirming_goal_proposal_creates_tentative_goal() -> None:
+    from app.chat.actions import (
+        ConfirmCaptureProposalRequest,
+        _persist_preview,
+        _proposal_for_module,
+        confirm_capture_proposal,
+    )
+    from app.user_model.goals import list_goals
+
+    session_id = _session_id("goal-confirm")
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO chat_sessions (id) VALUES (%s) ON CONFLICT DO NOTHING",
+                (session_id,),
+            )
+        conn.commit()
+
+    proposal = _proposal_for_module("goals", "become a staff engineer", explicit=True)
+    preview = _persist_preview(session_id, proposal)
+    resp = confirm_capture_proposal(ConfirmCaptureProposalRequest(proposal_id=preview.id))
+    assert resp.goal_id is not None
+    assert any(g.goal_id == resp.goal_id and g.status == "tentative" for g in list_goals())
+
+
+def test_explicit_add_goal_detected() -> None:
+    proposals = _detect_capture_proposals("add this as a goal: become a staff engineer")
+    assert proposals and proposals[0].module_id == "goals"
+    assert proposals[0].item_type == "goal"
+
+
+def test_explicit_add_still_works_inside_a_question_form() -> None:
+    proposals = _detect_capture_proposals("add this to tasks: renew passport")
+    assert proposals and proposals[0].module_id == "tasks"
 
 
 def test_fast_mode_attaches_no_buckets(tmp_path) -> None:
@@ -72,10 +113,64 @@ def test_router_fallback_selects_buckets_and_breadth(tmp_path) -> None:
     assert narrow.breadth == "narrow"
     assert broad.breadth == "broad"
     assert all(key in {
-        "who_am_i","goals","interests_and_works","career","health","relationships","habits","aspirations"
+        "who_am_i", "interests_and_works", "career", "health", "relationships", "habits", "aspirations"
     } for key in broad.buckets)
     assert 1 <= len(broad.buckets) <= 3
     assert narrow.expansion_terms == []
+
+
+def test_router_selects_modules_via_lexical_fallback() -> None:
+    from app.chat.actions import _route_and_classify, QUERYABLE_MODULES
+
+    d1 = _route_and_classify("what tasks are overdue?")
+    assert "tasks" in d1.modules
+    d2 = _route_and_classify("did I do my routine today?")
+    assert "routines" in d2.modules
+    d3 = _route_and_classify("tell me a story about the ocean")
+    assert d3.modules == []
+    d4 = _route_and_classify("my short-term goals?")
+    assert "goals" in d4.modules
+    d5 = _route_and_classify("how far is my OPT plan?")
+    assert "plans" in d5.modules
+    assert d1.modules == [m for m in d1.modules if m in QUERYABLE_MODULES]
+
+
+def test_structured_context_renders_selected_modules(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.chat.actions import _structured_context
+    from app.modules.tasks import TaskCreate, create_task
+    from app.user_model.goals import create_goal
+
+    create_task(TaskCreate(title="Renew passport"), review=False)
+    create_goal(title="Start an LLC", status="active", horizon="short_term")
+    block = _structured_context(["tasks", "goals"])
+    assert "Renew passport" in block
+    assert "Start an LLC" in block
+
+
+def test_structured_context_empty_when_no_modules() -> None:
+    from app.chat.actions import _structured_context
+
+    assert _structured_context([]) == ""
+
+
+def test_understanding_context_includes_structured_block_for_task_query(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.modules.tasks import TaskCreate, create_task
+
+    create_task(TaskCreate(title="File taxes"), review=False)
+    ctx = _build_answer_context("understanding", "what tasks are overdue?")
+    assert "Structured data" in ctx
+    assert "File taxes" in ctx
+
+
+def test_fast_mode_has_no_structured_block(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.modules.tasks import TaskCreate, create_task
+
+    create_task(TaskCreate(title="File taxes"), review=False)
+    ctx = _build_answer_context("fast", "what tasks are overdue?")
+    assert "Structured data" not in ctx
 
 
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:

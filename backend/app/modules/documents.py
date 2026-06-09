@@ -22,6 +22,7 @@ from app.lifecycle import (
     process_lifecycle_for_item,
     set_lifecycle_status,
 )
+from app.lifecycle.bucket_keys import ALLOWED_KEYS_LINE, normalize_bucket_key
 from app.llm import LLMUnavailable, generate_json
 from app.rag import embed_documents
 from app.rag.retrieval import vector_literal
@@ -128,6 +129,13 @@ def create_document(
             process_lifecycle_for_item(result.item["id"], root=review_root)
             _set_document_bucket_update_text(result.item["id"], connection_summary)
             _auto_weave_connected_buckets(result.item["id"])
+        bucket_keys = _route_document_buckets(payload.content, summary)
+        if bucket_keys:
+            _write_document_bucket_updates(
+                result.item["id"],
+                bucket_keys,
+                connection_summary,
+            )
 
     return get_document(result.item["id"])
 
@@ -418,6 +426,86 @@ def _fallback_tag(content: str) -> str:
 def _fallback_summary(summary: str) -> str:
     compact = _compact_text(summary, limit=240)
     return compact or "This document was added to Orbit for future context."
+
+
+def _route_document_buckets(content: str, summary: str) -> list[str]:
+    try:
+        data = generate_json(
+            f"Document summary:\n{summary}\n\nExcerpt:\n{content[:2000]}\n\n"
+            'Return JSON: {"bucket_keys": ["..."]}. Include a key ONLY if this '
+            "document meaningfully informs the person's life narrative for that "
+            "area; return [] for purely logistical/reference documents.",
+            system="Route a personal document to life-story buckets. Return only JSON. "
+            + ALLOWED_KEYS_LINE,
+            temperature=0.1,
+            max_output_tokens=120,
+        )
+        keys = [normalize_bucket_key(k) for k in (data.get("bucket_keys") or [])]
+        out: list[str] = []
+        for key in keys:
+            if key and key not in out:
+                out.append(key)
+        return out[:3]
+    except (LLMUnavailable, Exception):
+        return []
+
+
+def _write_document_bucket_updates(
+    life_item_id: UUID | str,
+    bucket_keys: list[str],
+    text: str,
+) -> None:
+    if not bucket_keys or not text.strip():
+        return
+
+    woven_bucket_ids: list[UUID] = []
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            for bucket_key in bucket_keys:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM story_buckets
+                    WHERE stable_key = %s AND status = 'active'
+                    """,
+                    (bucket_key,),
+                )
+                bucket = cur.fetchone()
+                if bucket is None:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO bucket_updates (
+                        story_bucket_id, life_item_id, status, update_text, source_event
+                    )
+                    VALUES (%s, %s, 'pending', %s, %s)
+                    """,
+                    (
+                        bucket["id"],
+                        life_item_id,
+                        text,
+                        Jsonb({"source": "documents", "bucket_key": bucket_key}),
+                    ),
+                )
+                woven_bucket_ids.append(bucket["id"])
+            if woven_bucket_ids:
+                cur.execute(
+                    """
+                    UPDATE life_items
+                    SET bucket_update_status = 'complete',
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (life_item_id,),
+                )
+
+    from app.lifecycle.story_weave import StoryWeaveError, weave_story_bucket
+
+    for bucket_id in woven_bucket_ids:
+        try:
+            weave_story_bucket(bucket_id)
+        except StoryWeaveError:
+            continue
 
 
 def _auto_weave_connected_buckets(life_item_id: UUID) -> None:

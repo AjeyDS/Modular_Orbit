@@ -146,6 +146,28 @@ def ensure_schema() -> None:
 
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS routine_items (
+                    life_item_id UUID PRIMARY KEY REFERENCES life_items(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS routine_completions (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    routine_life_item_id UUID NOT NULL REFERENCES life_items(id) ON DELETE CASCADE,
+                    completed_on DATE NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (routine_life_item_id, completed_on)
+                )
+                """
+            )
+
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS document_items (
                     life_item_id UUID PRIMARY KEY REFERENCES life_items(id) ON DELETE CASCADE,
                     unique_name TEXT NOT NULL UNIQUE
@@ -259,6 +281,11 @@ def ensure_schema() -> None:
                 )
                 """
             )
+            cur.execute(
+                "ALTER TABLE goals ADD COLUMN IF NOT EXISTS horizon TEXT NOT NULL DEFAULT 'long_term'"
+            )
+            cur.execute("ALTER TABLE goals ADD COLUMN IF NOT EXISTS target_date DATE")
+            cur.execute("ALTER TABLE goals ADD COLUMN IF NOT EXISTS target_note TEXT")
 
             cur.execute(
                 """
@@ -397,6 +424,25 @@ def ensure_schema() -> None:
 
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS companion_messages (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    session_id UUID NOT NULL REFERENCES life_items(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL CHECK (role IN ('assistant', 'user')),
+                    content TEXT NOT NULL,
+                    meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_companion_messages_session
+                    ON companion_messages (session_id, created_at)
+                """
+            )
+
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS capture_proposals (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
@@ -413,10 +459,14 @@ def ensure_schema() -> None:
                     status TEXT NOT NULL DEFAULT 'previewed'
                         CHECK (status IN ('previewed', 'accepted', 'rejected')),
                     created_life_item_id UUID REFERENCES life_items(id) ON DELETE SET NULL,
+                    created_goal_id TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            cur.execute(
+                "ALTER TABLE capture_proposals ADD COLUMN IF NOT EXISTS created_goal_id TEXT"
             )
 
             cur.execute(
@@ -484,6 +534,10 @@ def ensure_schema() -> None:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_task_priority_suggestion_runs_status_created "
                 "ON task_priority_suggestion_runs(status, created_at DESC)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_routine_completions_item_date "
+                "ON routine_completions(routine_life_item_id, completed_on DESC)"
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_document_items_unique_name ON document_items(unique_name)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_plan_steps_life_item ON plan_steps(life_item_id)")

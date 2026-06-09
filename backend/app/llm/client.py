@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from google import genai
@@ -57,6 +58,33 @@ def generate_text(
     if not text:
         raise LLMUnavailable("LLM returned an empty response")
     return text
+
+
+def generate_text_stream(
+    prompt: str,
+    *,
+    system: str,
+    temperature: float = 0.5,
+    max_output_tokens: int = 1200,
+) -> Iterator[str]:
+    """Run a streaming text-generation call."""
+    if not llm_enabled():
+        raise LLMUnavailable("LLM calls are disabled")
+
+    client = genai.Client(api_key=settings.gemini_api_key)
+    stream = client.models.generate_content_stream(
+        model=_normalize_model_name(settings.gemini_chat_model),
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        ),
+    )
+    for chunk in stream:
+        text = getattr(chunk, "text", None)
+        if text:
+            yield text
 
 
 def generate_json(

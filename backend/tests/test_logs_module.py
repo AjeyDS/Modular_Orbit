@@ -106,7 +106,7 @@ def test_logs_can_archive_and_delete_but_not_complete(tmp_path) -> None:
             assert cur.fetchone()["count"] == 0
 
 
-def test_logs_api_create_list_without_archive_delete_routes() -> None:
+def test_logs_api_create_and_list() -> None:
     client = TestClient(app)
     request_id = _request_id("api-log")
 
@@ -127,13 +127,13 @@ def test_logs_api_create_list_without_archive_delete_routes() -> None:
     assert list_response.status_code == 200
     assert any(row["id"] == created["id"] for row in list_response.json())
 
-    archive_response = client.post(f"/modules/logs/{created['id']}/archive")
-    assert archive_response.status_code == 404
-
-    delete_response = client.delete(f"/modules/logs/{created['id']}")
-    assert delete_response.status_code == 404
-
-    archived_list_response = client.get("/modules/logs", params={"status": "archived"})
-    assert archived_list_response.status_code == 422
-
     remove_log(created["id"])
+
+
+def test_log_delete_and_archive_http() -> None:
+    client = TestClient(app)
+    created = client.post("/modules/logs", json={"text": "test log entry"}).json()
+    log_id = created["id"]
+    assert client.post(f"/modules/logs/{log_id}/archive").json()["lifecycle_status"] == "archived"
+    assert client.delete(f"/modules/logs/{log_id}").status_code == 204
+    assert client.delete(f"/modules/logs/{log_id}").status_code == 404

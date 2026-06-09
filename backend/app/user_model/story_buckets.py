@@ -53,18 +53,6 @@ DEFAULT_STORY_BUCKETS: tuple[StoryBucketSeed, ...] = (
         initial_body="# Who Am I\n\n",
     ),
     StoryBucketSeed(
-        stable_key="goals",
-        file_name="goals.md",
-        display_name="Goals",
-        description="Active and tentative goals with stable IDs for Connections.",
-        is_splittable=False,
-        initial_body=(
-            "# Goals\n\n"
-            "## Active\n\n"
-            "## Tentative\n\n"
-        ),
-    ),
-    StoryBucketSeed(
         stable_key="interests_and_works",
         file_name="interests_and_works.md",
         display_name="Interests And Works",
@@ -188,6 +176,11 @@ def ensure_story_buckets(root: Path | None = None, conn: Connection | None = Non
                 (new_content, row["id"]),
             )
 
+        cur.execute(
+            "UPDATE story_buckets SET status = 'archived', updated_at = now() "
+            "WHERE stable_key = 'goals' AND status = 'active'"
+        )
+
 
 def list_story_buckets(conn: Connection | None = None) -> list[dict]:
     """Return active Story Buckets ordered for the settings UI."""
@@ -205,8 +198,7 @@ def list_story_buckets(conn: Connection | None = None) -> list[dict]:
             ORDER BY
                 CASE stable_key
                     WHEN 'who_am_i' THEN 1
-                    WHEN 'goals' THEN 2
-                    WHEN 'interests_and_works' THEN 3
+                    WHEN 'interests_and_works' THEN 2
                     ELSE 10
                 END,
                 display_name

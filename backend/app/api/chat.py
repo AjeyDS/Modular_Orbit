@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Response, status
+from fastapi.responses import StreamingResponse
 
 from app.chat import (
     ChatMessageItem,
@@ -19,6 +22,7 @@ from app.chat import (
     list_chat_sessions,
     rename_chat_session,
     respond_to_chat,
+    respond_to_chat_stream,
 )
 
 
@@ -28,6 +32,15 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 @router.post("/respond", response_model=ChatResponse)
 def respond_to_chat_endpoint(payload: ChatRequest) -> ChatResponse:
     return respond_to_chat(payload)
+
+
+@router.post("/respond/stream")
+def respond_to_chat_stream_endpoint(payload: ChatRequest) -> StreamingResponse:
+    def gen():
+        for event in respond_to_chat_stream(payload):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @router.post("/capture-proposals/confirm", response_model=ConfirmCaptureProposalResponse)

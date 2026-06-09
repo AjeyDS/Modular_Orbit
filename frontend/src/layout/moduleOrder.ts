@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'orbit:module-order'
-const DEFAULT_ORDER = ['chat', 'curious', 'tasks', 'plans', 'logs', 'documents', 'user_model', 'recommendations', 'strategies', 'goals']
+const DEFAULT_ORDER = ['chat', 'curious', 'tasks', 'routine', 'plans', 'logs', 'documents', 'user_model', 'recommendations', 'strategies', 'goals']
 const CHANGE_EVENT = 'orbit:module-order-changed'
 
 export function defaultIndex(moduleId: string) {

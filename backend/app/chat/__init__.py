@@ -5,8 +5,9 @@ from app.chat.actions import (
     ChatResponse,
     ConfirmCaptureProposalRequest,
     ConfirmCaptureProposalResponse,
-    respond_to_chat,
     confirm_capture_proposal,
+    respond_to_chat,
+    respond_to_chat_stream,
 )
 from app.chat.item_chat import (
     ItemChatRequest,
@@ -44,4 +45,5 @@ __all__ = [
     "list_chat_sessions",
     "rename_chat_session",
     "respond_to_chat",
+    "respond_to_chat_stream",
 ]

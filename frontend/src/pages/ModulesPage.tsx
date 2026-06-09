@@ -5,6 +5,7 @@ import {
   ChevronUp,
   CircleHelp,
   FileText,
+  Flame,
   ListTodo,
   NotebookTabs,
   ScrollText,
@@ -203,6 +204,7 @@ export default function ModulesPage({ catalog, enabledModules, enabledByModule, 
 
 function moduleIcon(moduleId: string) {
   if (moduleId === 'tasks') return <ListTodo size={16} />
+  if (moduleId === 'routine') return <Flame size={16} />
   if (moduleId === 'plans') return <NotebookTabs size={16} />
   if (moduleId === 'documents') return <FileText size={16} />
   if (moduleId === 'logs') return <ScrollText size={16} />

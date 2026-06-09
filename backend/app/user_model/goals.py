@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
@@ -12,6 +13,7 @@ from app.user_model.paths import user_model_root
 
 
 GoalStatus = Literal["active", "tentative"]
+_UNSET = object()
 
 # Legacy markdown parsing — used once at seed time to lift existing goals.md into the DB.
 _LEGACY_GOAL_MARKER_RE = re.compile(r"<!--\s*goal:\s*([a-z][a-z0-9_-]*)\s*-->")
@@ -25,6 +27,9 @@ class GoalEntry:
     title: str
     body: str
     status: GoalStatus
+    horizon: str = "long_term"
+    target_date: date | None = None
+    target_note: str | None = None
 
 
 def goals_path(root: Path | None = None) -> Path:
@@ -72,7 +77,7 @@ def list_goals() -> list[GoalEntry]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT goal_id, title, body, status
+                SELECT goal_id, title, body, status, horizon, target_date, target_note
                 FROM goals
                 ORDER BY
                     CASE status WHEN 'active' THEN 0 ELSE 1 END,
@@ -86,9 +91,140 @@ def list_goals() -> list[GoalEntry]:
                     title=row["title"],
                     body=row["body"] or "",
                     status=row["status"],
+                    horizon=row["horizon"],
+                    target_date=row["target_date"],
+                    target_note=row["target_note"],
                 )
                 for row in cur.fetchall()
             ]
+
+
+def _slugify_goal(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    slug = re.sub(r"-+", "-", slug)
+    return slug[:60].strip("-") or "goal"
+
+
+def create_goal(
+    title: str,
+    body: str = "",
+    status: GoalStatus = "tentative",
+    horizon: str = "long_term",
+    target_date: date | None = None,
+    target_note: str | None = None,
+) -> GoalEntry:
+    base = _slugify_goal(title)
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            goal_id = base
+            n = 2
+            while True:
+                cur.execute("SELECT 1 FROM goals WHERE goal_id = %s", (goal_id,))
+                if cur.fetchone() is None:
+                    break
+                goal_id = f"{base}-{n}"
+                n += 1
+            cur.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 AS p FROM goals WHERE status = %s",
+                (status,),
+            )
+            position = cur.fetchone()["p"]
+            cur.execute(
+                """
+                INSERT INTO goals (
+                    goal_id, title, body, status, position, horizon, target_date, target_note
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING goal_id, title, body, status, horizon, target_date, target_note
+                """,
+                (goal_id, title, body, status, position, horizon, target_date, target_note),
+            )
+            row = cur.fetchone()
+    return GoalEntry(
+        goal_id=row["goal_id"],
+        title=row["title"],
+        body=row["body"] or "",
+        status=row["status"],
+        horizon=row["horizon"],
+        target_date=row["target_date"],
+        target_note=row["target_note"],
+    )
+
+
+def _row_to_goal_entry(row: dict) -> GoalEntry:
+    return GoalEntry(
+        goal_id=row["goal_id"],
+        title=row["title"],
+        body=row["body"] or "",
+        status=row["status"],
+        horizon=row["horizon"],
+        target_date=row["target_date"],
+        target_note=row["target_note"],
+    )
+
+
+def update_goal(
+    goal_id: str,
+    *,
+    title: str | None = None,
+    body: str | None = None,
+    status: GoalStatus | None = None,
+    horizon: str | None = None,
+    target_date: date | None | object = _UNSET,
+    target_note: str | None | object = _UNSET,
+) -> GoalEntry:
+    sets: list[str] = []
+    params: list[object] = []
+    if title is not None:
+        sets.append("title = %s")
+        params.append(title)
+    if body is not None:
+        sets.append("body = %s")
+        params.append(body)
+    if status is not None:
+        sets.append("status = %s")
+        params.append(status)
+    if horizon is not None:
+        sets.append("horizon = %s")
+        params.append(horizon)
+    if target_date is not _UNSET:
+        sets.append("target_date = %s")
+        params.append(target_date)
+    if target_note is not _UNSET:
+        sets.append("target_note = %s")
+        params.append(target_note)
+    if not sets:
+        for goal in list_goals():
+            if goal.goal_id == goal_id:
+                return goal
+        raise ValueError(f"Unknown goal: {goal_id}")
+    params.append(goal_id)
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE goals
+                SET {", ".join(sets)}, updated_at = now()
+                WHERE goal_id = %s
+                RETURNING goal_id, title, body, status, horizon, target_date, target_note
+                """,
+                params,
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"Unknown goal: {goal_id}")
+    return _row_to_goal_entry(row)
+
+
+def delete_goal(goal_id: str) -> None:
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM goals WHERE goal_id = %s RETURNING goal_id",
+                (goal_id,),
+            )
+            if cur.fetchone() is None:
+                raise ValueError(f"Unknown goal: {goal_id}")
 
 
 def promote_goal(goal_id: str) -> GoalEntry:
@@ -100,19 +236,14 @@ def promote_goal(goal_id: str) -> GoalEntry:
                 UPDATE goals
                 SET status = 'active', updated_at = now()
                 WHERE goal_id = %s
-                RETURNING goal_id, title, body, status
+                RETURNING goal_id, title, body, status, horizon, target_date, target_note
                 """,
                 (goal_id,),
             )
             row = cur.fetchone()
             if row is None:
                 raise ValueError(f"Unknown goal: {goal_id}")
-            return GoalEntry(
-                goal_id=row["goal_id"],
-                title=row["title"],
-                body=row["body"] or "",
-                status=row["status"],
-            )
+            return _row_to_goal_entry(row)
 
 
 def _split_goal_sections_legacy(text: str) -> dict[GoalStatus, str]:

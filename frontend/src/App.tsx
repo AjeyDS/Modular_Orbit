@@ -12,9 +12,11 @@ import {
 import ChatPage from './pages/ChatPage'
 import CuriousPage from './pages/CuriousPage'
 import DocumentsPage from './pages/DocumentsPage'
+import GoalsPage from './pages/GoalsPage'
 import LogsPage from './pages/LogsPage'
 import ModulesPage from './pages/ModulesPage'
 import PlansPage from './pages/PlansPage'
+import RoutinePage from './pages/RoutinePage'
 import SettingsPage from './pages/SettingsPage'
 import TasksPage from './pages/TasksPage'
 import UserModelPage from './pages/UserModelPage'
@@ -94,7 +96,9 @@ function AppContent() {
               <Route path="/chat" element={<ChatPage />} />
               <Route path="/modules/curious" element={<CuriousPage />} />
               <Route path="/logs" element={<LogsPage />} />
+              <Route path="/goals" element={<GoalsPage />} />
               <Route path="/modules/tasks" element={<TasksPage />} />
+              <Route path="/modules/routine" element={<RoutinePage />} />
               <Route path="/modules/plans" element={<PlansPage />} />
               <Route path="/modules/documents" element={<DocumentsPage />} />
               <Route path="/user-model" element={<UserModelPage />} />
@@ -153,7 +157,7 @@ function uniqueEnabledModules(instances: ModuleInstanceItem[], catalog: ModuleCa
 }
 
 function moduleOrder(moduleId: string) {
-  const order = ['chat', 'curious', 'tasks', 'plans', 'logs', 'documents', 'user_model', 'recommendations', 'strategies', 'goals']
+  const order = ['chat', 'curious', 'tasks', 'routine', 'plans', 'logs', 'documents', 'user_model', 'recommendations', 'strategies', 'goals']
   const index = order.indexOf(moduleId)
   return index === -1 ? order.length : index
 }

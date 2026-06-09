@@ -646,7 +646,7 @@ def _pending_curious_story_bucket_ids() -> list[UUID]:
                 SELECT DISTINCT story_bucket_id
                 FROM bucket_updates
                 WHERE status = 'pending'
-                    AND source_event ->> 'source' IN ('curious_bay', 'curious_dynamic')
+                    AND source_event ->> 'source' IN ('curious_bay', 'curious_dynamic', 'curious_companion')
                 ORDER BY story_bucket_id
                 """
             )

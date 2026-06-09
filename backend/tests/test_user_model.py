@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from uuid import uuid4
 
 import pytest
@@ -29,17 +30,136 @@ def registry_ready() -> None:
     sync_module_registry()
 
 
+def test_goal_crud_http() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    created = client.post("/user-model/goals", json={"title": "Save 10k", "body": "buffer"})
+    assert created.status_code == 201
+    goal_id = created.json()["goal_id"]
+    assert client.get("/user-model/goals").status_code == 200
+    assert (
+        client.patch(f"/user-model/goals/{goal_id}", json={"body": "bigger buffer"}).json()["body"]
+        == "bigger buffer"
+    )
+    assert client.post(f"/user-model/goals/{goal_id}/promote").json()["status"] == "active"
+    assert client.delete(f"/user-model/goals/{goal_id}").status_code == 204
+    assert client.delete(f"/user-model/goals/{goal_id}").status_code == 404
+
+
+def test_update_goal_preserves_id() -> None:
+    from app.user_model.goals import create_goal, update_goal
+    from datetime import date
+
+    g = create_goal(title="Learn Rust", body="x", target_date=date(2026, 12, 1), target_note="by year end")
+    u = update_goal(g.goal_id, title="Learn Rust deeply", body="y")
+    assert u.goal_id == g.goal_id
+    assert u.title == "Learn Rust deeply"
+    assert u.body == "y"
+    cleared = update_goal(g.goal_id, target_date=None, target_note=None)
+    assert cleared.target_date is None
+    assert cleared.target_note is None
+
+
+def test_delete_goal_removes_only_target() -> None:
+    from app.user_model.goals import create_goal, delete_goal, list_goals
+
+    a = create_goal(title="Goal A")
+    b = create_goal(title="Goal B")
+    delete_goal(a.goal_id)
+    ids = {x.goal_id for x in list_goals()}
+    assert a.goal_id not in ids
+    assert b.goal_id in ids
+
+
+def test_update_missing_goal_raises() -> None:
+    from app.user_model.goals import update_goal
+
+    with pytest.raises(ValueError):
+        update_goal("nope", title="x")
+
+
+def test_create_goal_inserts_tentative_with_stable_slug() -> None:
+    from app.user_model.goals import create_goal, list_goals
+
+    g = create_goal(title="Build a data engineering career", body="Because…")
+    assert g.goal_id == "build-a-data-engineering-career"
+    assert g.status == "tentative"
+    assert any(x.goal_id == g.goal_id for x in list_goals())
+
+
+def test_create_goal_slug_collision_gets_suffix() -> None:
+    from app.user_model.goals import create_goal
+
+    a = create_goal(title="Run a marathon", body="")
+    b = create_goal(title="Run a marathon", body="")
+    assert a.goal_id != b.goal_id
+    assert b.goal_id.startswith("run-a-marathon")
+
+
+def test_create_goal_round_trips_horizon_and_target_note() -> None:
+    from app.user_model.goals import create_goal
+
+    g = create_goal(
+        title="Ship MVP",
+        body="",
+        horizon="short_term",
+        target_note="6 months",
+    )
+    assert g.horizon == "short_term"
+    assert g.target_note == "6 months"
+    assert g.horizon != "long_term"
+
+    default_g = create_goal(title="Retire early", body="")
+    assert default_g.horizon == "long_term"
+
+
+def test_goal_entry_has_horizon_and_targets() -> None:
+    from app.user_model.goals import GoalEntry
+
+    fields = {f.name for f in dataclasses.fields(GoalEntry)}
+    assert {"horizon", "target_date", "target_note"} <= fields
+
+
+def test_goals_bucket_not_seeded_and_archived(tmp_path) -> None:
+    from app.user_model.story_buckets import DEFAULT_STORY_BUCKETS, ensure_story_buckets
+
+    assert all(seed.stable_key != "goals" for seed in DEFAULT_STORY_BUCKETS)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO story_buckets (
+                    stable_key, file_path, display_name, description, is_splittable, status
+                )
+                VALUES ('goals', %s, 'Goals', 'legacy', FALSE, 'active')
+                ON CONFLICT (stable_key) DO NOTHING
+                """,
+                (str(tmp_path / "goals.md"),),
+            )
+        conn.commit()
+    ensure_story_buckets(tmp_path)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM story_buckets WHERE stable_key = 'goals'")
+            row = cur.fetchone()
+            cur.execute("SELECT COUNT(*) c FROM story_buckets WHERE status = 'active'")
+            active = cur.fetchone()["c"]
+    assert row is None or row["status"] == "archived"
+    assert active == 7
+
+
 def test_seed_story_buckets_create_stable_rows_with_content(tmp_path) -> None:
     with connect() as conn:
         ensure_story_buckets(tmp_path, conn)
         buckets = list_story_buckets(conn)
 
         stable_keys = [bucket["stable_key"] for bucket in buckets]
-        assert stable_keys[:3] == ["who_am_i", "goals", "interests_and_works"]
-
-        goals_bucket = next(bucket for bucket in buckets if bucket["stable_key"] == "goals")
-        assert goals_bucket["display_name"] == "Goals"
-        assert goals_bucket["content"].startswith("# Goals")
+        assert stable_keys[:2] == ["who_am_i", "interests_and_works"]
+        assert "goals" not in stable_keys
+        assert len(stable_keys) == 7
         conn.rollback()
 
 

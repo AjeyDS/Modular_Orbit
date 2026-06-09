@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from collections.abc import Iterator
 from typing import Any, Literal
 from uuid import UUID
 
@@ -11,11 +12,12 @@ from pydantic import BaseModel, Field
 from psycopg.types.json import Jsonb
 
 from app.db import transaction
-from app.llm import LLMUnavailable, generate_json, generate_text
+from app.llm import LLMUnavailable, generate_json, generate_text, generate_text_stream
 from app.modules.documents import DocumentCreate, create_document
 from app.modules.logs import LogCreate, create_log
 from app.modules.plans import PlanCreate, PlanStepCreate, create_plan
 from app.modules.tasks import TaskCreate, create_task
+from app.user_model.goals import create_goal
 from app.rag import retrieve_chunks
 from app.user_model import list_goals
 
@@ -23,15 +25,13 @@ from app.user_model import list_goals
 ChatMode = Literal["fast", "understanding"]
 ConfidenceBucket = Literal["low", "medium", "high"]
 
-KNOWN_BUCKET_KEYS = {
-    "who_am_i", "goals", "interests_and_works", "career",
-    "health", "relationships", "habits", "aspirations",
-}
+from app.lifecycle.bucket_keys import KNOWN_BUCKET_KEYS
 _BROAD_MARKERS = (
     "what should i", "what are the things", "what do i", "focus on",
     "my life", "everything", "overall", "in general", "priorities",
     "where should i", "how am i doing",
 )
+QUERYABLE_MODULES = frozenset({"tasks", "plans", "goals", "routines"})
 
 
 @dataclass
@@ -39,6 +39,7 @@ class RouteDecision:
     breadth: str  # "narrow" | "broad"
     buckets: list[str] = field(default_factory=list)
     expansion_terms: list[str] = field(default_factory=list)
+    modules: list[str] = field(default_factory=list)
     rationale: str = ""
 
 CONFIDENCE_SCORES: dict[ConfidenceBucket, float] = {
@@ -83,12 +84,13 @@ class ConfirmCaptureProposalRequest(BaseModel):
 class ConfirmCaptureProposalResponse(BaseModel):
     proposal_id: UUID
     module_id: str
-    life_item_id: UUID
+    life_item_id: UUID | None = None
+    goal_id: str | None = None
     status: str
 
 
 class DetectedProposal(BaseModel):
-    module_id: Literal["logs", "tasks", "plans", "documents"]
+    module_id: Literal["logs", "tasks", "plans", "documents", "goals"]
     item_type: str
     title: str
     description: str = ""
@@ -150,6 +152,91 @@ def respond_to_chat(request: ChatRequest) -> ChatResponse:
     )
 
 
+def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
+    """Stream pipeline stage events, answer deltas, and a final done event."""
+    from app.chat.sessions import (
+        insert_chat_message,
+        truncate_for_title,
+        upsert_session_for_message,
+    )
+
+    with transaction() as conn:
+        upsert_session_for_message(
+            conn,
+            request.session_id,
+            initial_title=truncate_for_title(request.message),
+        )
+        insert_chat_message(
+            conn,
+            session_id=request.session_id,
+            role="user",
+            content=request.message,
+            mode=request.mode,
+        )
+
+    detected = _detect_capture_proposals(request.message)
+    suggestions = [
+        _persist_preview(request.session_id, proposal)
+        for proposal in detected
+        if _should_surface(request.session_id, proposal)
+    ]
+
+    if request.mode == "understanding":
+        yield {"stage": "routing"}
+        decision = _route_and_classify(request.message)
+        if decision.modules:
+            yield {"stage": "checking_state"}
+        yield {"stage": "retrieving"}
+        chunks = _understanding_retrieval(
+            request.message,
+            decision,
+            limit=8 if decision.breadth == "broad" else 4,
+        )
+        yield {"stage": "reading_story"}
+        context = _build_understanding_context(request.message, decision, chunks)
+    else:
+        yield {"stage": "retrieving"}
+        context = _build_answer_context(request.mode, request.message)
+
+    yield {"stage": "writing"}
+    system = _chat_system_prompt(request.mode)
+    prompt = _answer_prompt(request, context, suggestions)
+    answer_parts: list[str] = []
+    try:
+        for delta in generate_text_stream(
+            prompt,
+            system=system,
+            temperature=0.45,
+            max_output_tokens=2200 if request.mode == "understanding" else 1300,
+        ):
+            answer_parts.append(delta)
+            yield {"stage": "answer", "delta": delta}
+        answer = "".join(answer_parts)
+    except (LLMUnavailable, Exception):
+        answer = _fallback_context_answer(request.mode, context, bool(suggestions))
+        yield {"stage": "answer", "delta": answer}
+
+    suggestions_json: list[dict[str, Any]] | None
+    if suggestions:
+        suggestions_json = [proposal.model_dump(mode="json") for proposal in suggestions]
+    else:
+        suggestions_json = None
+
+    with transaction() as conn:
+        insert_chat_message(
+            conn,
+            session_id=request.session_id,
+            role="assistant",
+            content=answer,
+            suggestions=suggestions_json,
+        )
+
+    yield {
+        "stage": "done",
+        "suggestions": suggestions_json or [],
+    }
+
+
 def confirm_capture_proposal(request: ConfirmCaptureProposalRequest) -> ConfirmCaptureProposalResponse:
     with transaction() as conn:
         with conn.cursor() as cur:
@@ -164,13 +251,21 @@ def confirm_capture_proposal(request: ConfirmCaptureProposalRequest) -> ConfirmC
             proposal = cur.fetchone()
             if proposal is None:
                 raise ValueError(f"Unknown Capture Proposal: {request.proposal_id}")
-            if proposal["status"] == "accepted" and proposal["created_life_item_id"] is not None:
-                return ConfirmCaptureProposalResponse(
-                    proposal_id=proposal["id"],
-                    module_id=proposal["module_id"],
-                    life_item_id=proposal["created_life_item_id"],
-                    status="accepted",
-                )
+            if proposal["status"] == "accepted":
+                if proposal["module_id"] == "goals" and proposal.get("created_goal_id"):
+                    return ConfirmCaptureProposalResponse(
+                        proposal_id=proposal["id"],
+                        module_id=proposal["module_id"],
+                        goal_id=proposal["created_goal_id"],
+                        status="accepted",
+                    )
+                if proposal["created_life_item_id"] is not None:
+                    return ConfirmCaptureProposalResponse(
+                        proposal_id=proposal["id"],
+                        module_id=proposal["module_id"],
+                        life_item_id=proposal["created_life_item_id"],
+                        status="accepted",
+                    )
             if proposal["status"] != "previewed":
                 raise ValueError(f"Capture Proposal is not confirmable: {request.proposal_id}")
 
@@ -178,17 +273,36 @@ def confirm_capture_proposal(request: ConfirmCaptureProposalRequest) -> ConfirmC
 
     with transaction() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE capture_proposals
-                SET status = 'accepted',
-                    created_life_item_id = %s,
-                    updated_at = now()
-                WHERE id = %s
-                """,
-                (created["life_item_id"], request.proposal_id),
-            )
+            if proposal["module_id"] == "goals":
+                cur.execute(
+                    """
+                    UPDATE capture_proposals
+                    SET status = 'accepted',
+                        created_goal_id = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (created["goal_id"], request.proposal_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE capture_proposals
+                    SET status = 'accepted',
+                        created_life_item_id = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (created["life_item_id"], request.proposal_id),
+                )
 
+    if proposal["module_id"] == "goals":
+        return ConfirmCaptureProposalResponse(
+            proposal_id=request.proposal_id,
+            module_id=proposal["module_id"],
+            goal_id=created["goal_id"],
+            status="accepted",
+        )
     return ConfirmCaptureProposalResponse(
         proposal_id=request.proposal_id,
         module_id=proposal["module_id"],
@@ -197,10 +311,23 @@ def confirm_capture_proposal(request: ConfirmCaptureProposalRequest) -> ConfirmC
     )
 
 
+def _is_question_or_lookup(message: str) -> bool:
+    text = message.strip().lower()
+    if text.endswith("?"):
+        return True
+    first = text.split()[0] if text.split() else ""
+    return first in {
+        "what", "when", "where", "who", "why", "how", "which",
+        "is", "are", "do", "does", "did", "can", "could", "should", "will",
+    }
+
+
 def _detect_capture_proposals(message: str) -> list[DetectedProposal]:
     explicit = _detect_explicit(message)
     if explicit:
         return [explicit]
+    if _is_question_or_lookup(message):
+        return []
 
     suggested = _detect_suggested_with_llm(message) or _detect_suggested(message)
     return [suggested] if suggested else []
@@ -212,8 +339,8 @@ def _detect_suggested_with_llm(message: str) -> DetectedProposal | None:
         "Detect whether the user message contains a clear Life-Item-Shaped Intent: "
         "a clear verb-object intent or durable life-data statement that maps to one "
         "module. Do not create suggestions for casual questions, greetings, or vague "
-        "thinking. Confidence must be one of low, medium, high and is a discrete "
-        "bucket, not a probability."
+        "thinking. Never propose for questions or information lookups. Confidence must "
+        "be one of low, medium, high and is a discrete bucket, not a probability."
     )
     prompt = f"""
 Available modules:
@@ -221,14 +348,17 @@ Available modules:
 - logs: observations, updates, lightweight life events
 - plans: multi-step intentions
 - documents: durable reference text or notes
+- goals: a durable aspiration or direction the person wants, distinct from an actionable task
 
 Return JSON with this shape:
 {{
   "has_intent": boolean,
-  "module_id": "tasks" | "logs" | "plans" | "documents" | null,
+  "module_id": "tasks" | "logs" | "plans" | "documents" | "goals" | null,
   "title": string,
   "description": string,
   "confidence_bucket": "low" | "medium" | "high",
+  "horizon": "short_term" | "long_term",
+  "target_note": string,
   "payload": object
 }}
 
@@ -243,7 +373,7 @@ Message:
     if not data.get("has_intent"):
         return None
     module_id = data.get("module_id")
-    if module_id not in {"tasks", "logs", "plans", "documents"}:
+    if module_id not in {"tasks", "logs", "plans", "documents", "goals"}:
         return None
     confidence = data.get("confidence_bucket")
     if confidence not in {"low", "medium", "high"}:
@@ -254,6 +384,12 @@ Message:
     title = str(data.get("title") or _derive_title(message)).strip()
     description = str(data.get("description") or "").strip()
     payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    if module_id == "goals":
+        horizon = data.get("horizon")
+        if horizon not in {"short_term", "long_term"}:
+            horizon = "long_term"
+        target_note = str(data.get("target_note") or "").strip() or None
+        payload = {**payload, "horizon": horizon, "target_note": target_note}
     proposal = _proposal_for_module(module_id, description or message, explicit=False)
     return proposal.model_copy(
         update={
@@ -272,6 +408,7 @@ def _detect_explicit(message: str) -> DetectedProposal | None:
         (r"(?:log|save)\s+(?:this\s+)?(?:to\s+)?logs?\s*:?\s*(.+)", "logs"),
         (r"(?:make|create|save)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?plans?\s*:?\s*(.+)", "plans"),
         (r"(?:save|add)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?documents?\s*:?\s*(.+)", "documents"),
+        (r"(?:add|make|set)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?goals?\s*:?\s*(.+)", "goals"),
     ]
     for pattern, module_id in patterns:
         match = re.search(pattern, message, flags=re.IGNORECASE | re.DOTALL)
@@ -322,6 +459,16 @@ def _proposal_for_module(module_id: str, text: str, *, explicit: bool) -> Detect
             title=title,
             description=text,
             payload={"steps": steps},
+            confidence_bucket=bucket,
+            explicit_request=explicit,
+        )
+    if module_id == "goals":
+        return DetectedProposal(
+            module_id="goals",
+            item_type="goal",
+            title=title,
+            description=text,
+            payload={"horizon": "long_term"},
             confidence_bucket=bucket,
             explicit_request=explicit,
         )
@@ -398,7 +545,7 @@ def _persist_preview(session_id: str, proposal: DetectedProposal) -> CaptureProp
     return _row_to_preview(row, retrieval_policy)
 
 
-def _create_from_proposal(proposal: dict[str, Any]) -> dict[str, UUID]:
+def _create_from_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
     request_id = f"chat-proposal-{proposal['id']}"
     payload = proposal["payload"] or {}
     module_id = proposal["module_id"]
@@ -446,6 +593,15 @@ def _create_from_proposal(proposal: dict[str, Any]) -> dict[str, UUID]:
                 source={"kind": "chat_action", "proposal_id": str(proposal["id"])},
             )
         )
+    elif module_id == "goals":
+        goal = create_goal(
+            title=proposal["title"],
+            body=proposal["description"],
+            status="tentative",
+            horizon=payload.get("horizon", "long_term"),
+            target_note=payload.get("target_note"),
+        )
+        return {"goal_id": goal.goal_id}
     else:
         raise ValueError(f"Unsupported proposal module: {module_id}")
 
@@ -477,17 +633,16 @@ def _mode_answer(mode: ChatMode, has_suggestion: bool) -> str:
     return f"LLM is unavailable, so Understanding Chat can only report routed context right now.{suffix}"
 
 
-def _generate_chat_answer(
+def _answer_prompt(
     request: ChatRequest,
+    context: str,
     suggestions: list[CaptureProposalPreview],
 ) -> str:
-    context = _build_answer_context(request.mode, request.message)
-    system = _chat_system_prompt(request.mode)
     suggestion_context = "\n".join(
         f"- {proposal.module_id}: {proposal.title} ({proposal.confidence_bucket})"
         for proposal in suggestions
     ) or "None"
-    prompt = f"""
+    return f"""
 User message:
 {request.message}
 
@@ -504,6 +659,15 @@ Answer naturally as Orbit. If context is missing, say so plainly. Do not claim
 that chat itself was stored as memory. If previews exist, briefly mention that
 the user can save the preview; do not pressure them.
 """.strip()
+
+
+def _generate_chat_answer(
+    request: ChatRequest,
+    suggestions: list[CaptureProposalPreview],
+) -> str:
+    context = _build_answer_context(request.mode, request.message)
+    system = _chat_system_prompt(request.mode)
+    prompt = _answer_prompt(request, context, suggestions)
     try:
         return generate_text(
             prompt,
@@ -557,6 +721,85 @@ def _context_excerpts(context: str, *, limit: int = 4) -> list[str]:
     return [line[:700] for line in useful[:limit]]
 
 
+def _structured_tasks_context() -> str:
+    from app.modules.tasks import list_tasks
+
+    tasks = list_tasks(status="active", limit=10)
+    if not tasks:
+        return ""
+
+    def key(t):
+        return (t.due_date is None, t.due_date)
+
+    lines = [
+        f"- {t.title} — due {t.due_date or 'none'}, priority {t.priority or '-'}, {t.module_status or 'active'}"
+        for t in sorted(tasks, key=key)
+    ]
+    return "Tasks:\n" + "\n".join(lines)
+
+
+def _structured_plans_context() -> str:
+    from app.modules.plans import list_plans
+
+    plans = list_plans(status="active")
+    if not plans:
+        return ""
+    return "Plans:\n" + "\n".join(
+        f"- {p.title} — {p.completed_steps}/{p.total_steps} steps ({p.progress_percent}%)"
+        for p in plans
+    )
+
+
+def _structured_goals_context() -> str:
+    from app.user_model.goals import list_goals as list_structured_goals
+
+    goals = list_structured_goals()
+    if not goals:
+        return ""
+    return "Goals:\n" + "\n".join(
+        f"- {g.status}/{g.horizon}: {g.title}"
+        + (f" — target {g.target_note or g.target_date}" if (g.target_note or g.target_date) else "")
+        for g in goals[:10]
+    )
+
+
+def _structured_routines_context() -> str:
+    from app.modules.routine import list_routine_state
+
+    state = list_routine_state()
+    if not state.items:
+        return ""
+    return "Routines:\n" + "\n".join(
+        f"- {it.title} — streak {it.streak_count}, today: {'done' if it.today_completed else 'not done'}"
+        for it in state.items[:10]
+    )
+
+
+_STRUCTURED = {
+    "tasks": _structured_tasks_context,
+    "plans": _structured_plans_context,
+    "goals": _structured_goals_context,
+    "routines": _structured_routines_context,
+}
+
+
+def _structured_context(modules: list[str]) -> str:
+    blocks: list[str] = []
+    for module in modules:
+        fn = _STRUCTURED.get(module)
+        if fn is None:
+            continue
+        try:
+            block = fn()
+        except Exception:
+            block = ""
+        if block:
+            blocks.append(block)
+    if not blocks:
+        return ""
+    return "Structured data:\n" + "\n\n".join(blocks)
+
+
 def _build_answer_context(mode: ChatMode, message: str) -> str:
     if mode == "fast":
         sections = [_chunk_context(message, limit=4), _connection_context(message), _goal_context()]
@@ -564,9 +807,17 @@ def _build_answer_context(mode: ChatMode, message: str) -> str:
 
     decision = _route_and_classify(message)
     chunks = _understanding_retrieval(message, decision, limit=8 if decision.breadth == "broad" else 4)
+    return _build_understanding_context(message, decision, chunks)
+
+
+def _build_understanding_context(
+    message: str, decision: RouteDecision, chunks: list
+) -> str:
     chunk_block = _chunks_to_context(chunks)
+    structured = _structured_context(decision.modules)
     sections = [
         chunk_block,
+        structured,
         _connection_context(message),
         _selected_bucket_context(decision.buckets),
         _goal_context(),
@@ -731,14 +982,26 @@ def _route_and_classify(message: str) -> RouteDecision:
             terms = []
         if not buckets:
             buckets = _select_buckets_fallback(message, catalog)
-        return RouteDecision(breadth=breadth, buckets=buckets, expansion_terms=terms,
-                             rationale=str(data.get("rationale") or ""))
+        modules = [
+            m for m in (data.get("modules") or [])
+            if isinstance(m, str) and m in QUERYABLE_MODULES
+        ]
+        if not modules:
+            modules = _modules_fallback(message)
+        return RouteDecision(
+            breadth=breadth,
+            buckets=buckets,
+            expansion_terms=terms,
+            modules=modules,
+            rationale=str(data.get("rationale") or ""),
+        )
     except (LLMUnavailable, Exception):
         breadth = _breadth_fallback(message)
         return RouteDecision(
             breadth=breadth,
             buckets=_select_buckets_fallback(message, catalog),
             expansion_terms=[],
+            modules=_modules_fallback(message),
             rationale="lexical fallback",
         )
 
@@ -801,12 +1064,30 @@ def _retrieval_query(message: str, decision: RouteDecision) -> str:
     return message
 
 
+def _modules_fallback(message: str) -> list[str]:
+    lowered = message.lower()
+    modules: list[str] = []
+    if re.search(r"\b(due|overdue|task|todo)\b", lowered):
+        modules.append("tasks")
+    if re.search(r"\b(plan|progress|step|milestone)\b", lowered):
+        modules.append("plans")
+    if re.search(r"(goal|aspir|aiming)", lowered):
+        modules.append("goals")
+    if re.search(r"\b(routine|habit|streak|daily)\b", lowered):
+        modules.append("routines")
+    return modules
+
+
 def _route_prompt(message: str, catalog: list[dict[str, str]]) -> str:
+    queryable = ", ".join(sorted(QUERYABLE_MODULES))
     lines = "\n".join(f"- {b['stable_key']}: {b['display_name']} — {b['description']}" for b in catalog)
     return (
         "Buckets:\n" + lines + "\n\n"
+        f"Queryable modules: {queryable}. Pick modules whose structured data would help answer "
+        "the query, or [] if none.\n\n"
         'Return JSON: {"breadth":"narrow|broad","buckets":["key"],'
-        '"expansion_terms":["..."],"rationale":"one line"}\n\n'
+        '"expansion_terms":["..."],"modules":["tasks|plans|goals|routines"],'
+        '"rationale":"one line"}\n\n'
         f"Query:\n{message}"
     )
 

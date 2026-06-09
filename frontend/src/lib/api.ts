@@ -113,6 +113,34 @@ export interface CreateTaskRequest {
   module_status?: string | null
 }
 
+export interface RoutineItem {
+  id: string
+  title: string
+  description: string
+  lifecycle_status: Extract<LifecycleStatus, 'active' | 'archived' | 'deleted'>
+  connection_status: AsyncStepStatus
+  chunk_status: AsyncStepStatus
+  bucket_update_status: AsyncStepStatus
+  position: number
+  today_completed: boolean
+  streak_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface RoutineState {
+  date: string
+  total_count: number
+  completed_count: number
+  items: RoutineItem[]
+}
+
+export interface CreateRoutineRequest {
+  title: string
+  description?: string
+  position?: number
+}
+
 export interface PlanStepItem {
   id: string
   parent_step_id: string | null
@@ -217,8 +245,40 @@ export interface ChatResponse {
 export interface ConfirmCaptureProposalResponse {
   proposal_id: string
   module_id: string
-  life_item_id: string
+  life_item_id: string | null
+  goal_id: string | null
   status: string
+}
+
+export type GoalHorizon = 'short_term' | 'long_term'
+export type GoalStatus = 'active' | 'tentative'
+
+export interface GoalItem {
+  goal_id: string
+  title: string
+  body: string
+  status: GoalStatus
+  horizon: GoalHorizon
+  target_date: string | null
+  target_note: string | null
+}
+
+export interface GoalCreateRequest {
+  title: string
+  body?: string
+  status?: GoalStatus
+  horizon?: GoalHorizon
+  target_date?: string | null
+  target_note?: string | null
+}
+
+export interface GoalUpdateRequest {
+  title?: string
+  body?: string
+  status?: GoalStatus
+  horizon?: GoalHorizon
+  target_date?: string | null
+  target_note?: string | null
 }
 
 export interface ChatSessionItem {
@@ -322,6 +382,31 @@ export interface CuriousWeaveResult {
   }>
 }
 
+export interface CompanionMessageItem {
+  id: string
+  role: 'assistant' | 'user'
+  content: string
+  meta: Record<string, unknown>
+  created_at: string
+}
+
+export interface CompanionReply {
+  kind: string
+  message: string
+  quick_replies: Array<{ id?: string; label: string }>
+  target_bucket_key?: string | null
+}
+
+export interface CompanionState {
+  messages: CompanionMessageItem[]
+  pending_checkin: CompanionMessageItem | null
+  settings: Record<string, unknown>
+}
+
+export interface CompanionMessageResponse {
+  reply: CompanionReply
+}
+
 export interface StoryBucketItem {
   id: string
   stable_key: string
@@ -416,6 +501,42 @@ export function createLog(payload: CreateLogRequest): Promise<LogItem> {
   })
 }
 
+export function archiveLog(logId: string): Promise<LogItem> {
+  return apiFetch<LogItem>(`/modules/logs/${logId}/archive`, { method: 'POST' })
+}
+
+export function deleteLog(logId: string): Promise<void> {
+  return apiFetch<void>(`/modules/logs/${logId}`, { method: 'DELETE' })
+}
+
+export function listGoals(): Promise<GoalItem[]> {
+  return apiFetch<GoalItem[]>('/user-model/goals')
+}
+
+export function createGoal(payload: GoalCreateRequest): Promise<GoalItem> {
+  return apiFetch<GoalItem>('/user-model/goals', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateGoal(goalId: string, payload: GoalUpdateRequest): Promise<GoalItem> {
+  return apiFetch<GoalItem>(`/user-model/goals/${encodeURIComponent(goalId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function promoteGoal(goalId: string): Promise<GoalItem> {
+  return apiFetch<GoalItem>(`/user-model/goals/${encodeURIComponent(goalId)}/promote`, {
+    method: 'POST',
+  })
+}
+
+export function deleteGoal(goalId: string): Promise<void> {
+  return apiFetch<void>(`/user-model/goals/${encodeURIComponent(goalId)}`, { method: 'DELETE' })
+}
+
 export function fetchTasks(status: 'active' | 'completed' | null = 'active'): Promise<TaskItem[]> {
   const query = status ? `?status=${status}` : '?status='
   return apiFetch<TaskItem[]>(`/modules/tasks${query}`)
@@ -445,6 +566,44 @@ export function revertTaskRewrite(taskId: string): Promise<TaskItem> {
 
 export function deleteTask(taskId: string): Promise<void> {
   return apiFetch<void>(`/modules/tasks/${taskId}`, { method: 'DELETE' })
+}
+
+export function fetchRoutineState(date: string): Promise<RoutineState> {
+  return apiFetch<RoutineState>(`/modules/routine?date=${encodeURIComponent(date)}`)
+}
+
+export function createRoutineItem(payload: CreateRoutineRequest): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>('/modules/routine', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateRoutineItem(
+  routineId: string,
+  payload: Partial<CreateRoutineRequest>,
+): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>(`/modules/routine/${routineId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function completeRoutineItem(routineId: string, date: string): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>(`/modules/routine/${routineId}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({ date }),
+  })
+}
+
+export function uncompleteRoutineItem(routineId: string, date: string): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>(`/modules/routine/${routineId}/complete?date=${encodeURIComponent(date)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function archiveRoutineItem(routineId: string): Promise<RoutineItem> {
+  return apiFetch<RoutineItem>(`/modules/routine/${routineId}/archive`, { method: 'POST' })
 }
 
 export function fetchTaskPrioritySuggestion(): Promise<TaskPrioritySuggestionState> {
@@ -555,6 +714,91 @@ export function respondToChat(payload: {
   })
 }
 
+export interface StreamChatHandlers {
+  onStage?: (stage: string) => void
+  onAnswerDelta?: (delta: string) => void
+  onDone?: (suggestions: CaptureProposalPreview[]) => void
+}
+
+async function consumeSseStream(
+  response: Response,
+  handlers: StreamChatHandlers,
+): Promise<void> {
+  if (!response.body) {
+    throw new Error('Streaming response had no body')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const parts = buffer.split('\n\n')
+    buffer = parts.pop() ?? ''
+    for (const part of parts) {
+      for (const line of part.split('\n')) {
+        if (!line.startsWith('data:')) continue
+        const event = JSON.parse(line.slice(5).trim()) as {
+          stage?: string
+          delta?: string
+          suggestions?: CaptureProposalPreview[]
+        }
+        if (event.stage === 'answer' && event.delta) {
+          handlers.onAnswerDelta?.(event.delta)
+        } else if (event.stage === 'done') {
+          handlers.onDone?.(event.suggestions ?? [])
+        } else if (event.stage) {
+          handlers.onStage?.(event.stage)
+        }
+      }
+    }
+  }
+}
+
+export async function streamChat(
+  payload: { session_id: string; mode: ChatMode; message: string },
+  handlers: StreamChatHandlers,
+): Promise<void> {
+  let lastError = 'Network request failed'
+
+  for (const base of API_BASES) {
+    const url = `${base}/chat/respond/stream`
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!response.ok) {
+        let detail = `${url}: ${response.status} ${response.statusText}`
+        try {
+          const body = await response.json()
+          const bodyDetail =
+            typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail ?? body)
+          detail = `${url}: ${bodyDetail}`
+        } catch {
+          // Keep status text fallback.
+        }
+        lastError = detail
+        if (response.status === 404 || response.status >= 500) continue
+        throw new Error(detail)
+      }
+      await consumeSseStream(response, handlers)
+      return
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : `${url}: request failed`
+      continue
+    }
+  }
+
+  const fallback = await respondToChat(payload)
+  handlers.onAnswerDelta?.(fallback.answer)
+  handlers.onDone?.(fallback.suggestions)
+}
+
 export function confirmCaptureProposal(proposalId: string): Promise<ConfirmCaptureProposalResponse> {
   return apiFetch<ConfirmCaptureProposalResponse>('/chat/capture-proposals/confirm', {
     method: 'POST',
@@ -635,6 +879,44 @@ export function completeCuriousOnboarding(sessionId: string): Promise<CuriousCom
     method: 'POST',
     body: JSON.stringify({ session_id: sessionId }),
   })
+}
+
+export function fetchCompanionState(): Promise<CompanionState> {
+  return apiFetch<CompanionState>('/modules/curious/companion/state')
+}
+
+export function sendCompanionMessage(message: string): Promise<CompanionMessageResponse> {
+  return apiFetch<CompanionMessageResponse>('/modules/curious/companion/message', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  })
+}
+
+export function askCompanionQuestion(): Promise<CompanionMessageResponse> {
+  return apiFetch<CompanionMessageResponse>('/modules/curious/companion/ask', { method: 'POST' })
+}
+
+export function skipCompanionQuestion(bucketKey?: string | null): Promise<CompanionMessageResponse> {
+  return apiFetch<CompanionMessageResponse>('/modules/curious/companion/skip', {
+    method: 'POST',
+    body: JSON.stringify({ bucket_key: bucketKey ?? null }),
+  })
+}
+
+export function endCompanionSession(): Promise<CuriousWeaveResult> {
+  return apiFetch<CuriousWeaveResult>('/modules/curious/companion/end', { method: 'POST' })
+}
+
+export function sendCompanionEndBeacon(): boolean {
+  const path = '/api/modules/curious/companion/end'
+  if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+    return navigator.sendBeacon(path, new Blob(['{}'], { type: 'application/json' }))
+  }
+  if (typeof fetch !== 'undefined') {
+    void fetch(path, { method: 'POST', keepalive: true })
+    return true
+  }
+  return false
 }
 
 export function fetchStoryBuckets(): Promise<StoryBucketItem[]> {
