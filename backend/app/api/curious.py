@@ -9,9 +9,11 @@ from uuid import UUID
 from app.modules.companion import (
     CompanionMessageResponse,
     CompanionState,
+    ask_companion_question,
     end_companion_session,
     get_companion_state,
     send_companion_message,
+    skip_companion_question,
 )
 from app.modules.curious import (
     CuriousAnswerCreate,
@@ -38,6 +40,10 @@ class CuriousCompleteRequest(BaseModel):
 
 class CompanionMessageRequest(BaseModel):
     message: str
+
+
+class CompanionSkipRequest(BaseModel):
+    bucket_key: str | None = None
 
 
 @router.get("/onboarding", response_model=CuriousOnboardingState)
@@ -93,6 +99,18 @@ def get_companion_state_endpoint() -> CompanionState:
 @router.post("/companion/message", response_model=CompanionMessageResponse)
 def send_companion_message_endpoint(payload: CompanionMessageRequest) -> CompanionMessageResponse:
     return send_companion_message(payload.message)
+
+
+@router.post("/companion/ask", response_model=CompanionMessageResponse)
+def ask_companion_question_endpoint() -> CompanionMessageResponse:
+    return ask_companion_question()
+
+
+@router.post("/companion/skip", response_model=CompanionMessageResponse)
+def skip_companion_question_endpoint(
+    payload: CompanionSkipRequest,
+) -> CompanionMessageResponse:
+    return skip_companion_question(payload.bucket_key)
 
 
 @router.post("/companion/end", response_model=CuriousWeaveResult)

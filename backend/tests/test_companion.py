@@ -329,6 +329,31 @@ def test_due_check_off_when_frequency_zero(tmp_path, monkeypatch) -> None:
     assert companion.prepare_due_checkin() is None
 
 
+def test_on_demand_ask_persists_question(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.db import connect
+    from app.main import app
+
+    _ready_companion(tmp_path)
+    client = TestClient(app)
+    resp = client.post("/api/modules/curious/companion/ask")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reply"]["kind"] == "question"
+    assert body["reply"]["message"]
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM companion_messages
+                WHERE role = 'assistant' AND meta ->> 'kind' = 'question'
+                """
+            )
+            assert cur.fetchone()["c"] == 1
+
+
 def test_companion_http_send_and_state(tmp_path) -> None:
     from fastapi.testclient import TestClient
 

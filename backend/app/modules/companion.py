@@ -446,8 +446,10 @@ def _companion_acknowledge(session_id: UUID | str, text: str) -> dict[str, Any]:
     return {"kind": "acknowledge", "message": message}
 
 
-def _companion_ask(session_id: UUID | str) -> dict[str, Any]:
-    question = generate_companion_question()
+def _companion_ask(
+    session_id: UUID | str, *, exclude_bucket: str | None = None
+) -> dict[str, Any]:
+    question = generate_companion_question(exclude_bucket=exclude_bucket)
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -753,6 +755,18 @@ def get_companion_state() -> CompanionState:
 
 def send_companion_message(text: str) -> CompanionMessageResponse:
     reply = respond_to_user_turn(text)
+    return CompanionMessageResponse(reply=CompanionReply(**reply))
+
+
+def ask_companion_question() -> CompanionMessageResponse:
+    session = get_or_create_companion_session()
+    reply = _companion_ask(session["id"])
+    return CompanionMessageResponse(reply=CompanionReply(**reply))
+
+
+def skip_companion_question(bucket_key: str | None) -> CompanionMessageResponse:
+    session = get_or_create_companion_session()
+    reply = _companion_ask(session["id"], exclude_bucket=bucket_key)
     return CompanionMessageResponse(reply=CompanionReply(**reply))
 
 
