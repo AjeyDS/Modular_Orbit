@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from uuid import uuid4
 
 import pytest
@@ -27,6 +28,13 @@ from app.user_model.paths import user_model_root
 def registry_ready() -> None:
     ensure_schema()
     sync_module_registry()
+
+
+def test_goal_entry_has_horizon_and_targets() -> None:
+    from app.user_model.goals import GoalEntry
+
+    fields = {f.name for f in dataclasses.fields(GoalEntry)}
+    assert {"horizon", "target_date", "target_note"} <= fields
 
 
 def test_seed_story_buckets_create_stable_rows_with_content(tmp_path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
@@ -25,6 +26,9 @@ class GoalEntry:
     title: str
     body: str
     status: GoalStatus
+    horizon: str = "long_term"
+    target_date: date | None = None
+    target_note: str | None = None
 
 
 def goals_path(root: Path | None = None) -> Path:
@@ -72,7 +76,7 @@ def list_goals() -> list[GoalEntry]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT goal_id, title, body, status
+                SELECT goal_id, title, body, status, horizon, target_date, target_note
                 FROM goals
                 ORDER BY
                     CASE status WHEN 'active' THEN 0 ELSE 1 END,
@@ -86,6 +90,9 @@ def list_goals() -> list[GoalEntry]:
                     title=row["title"],
                     body=row["body"] or "",
                     status=row["status"],
+                    horizon=row["horizon"],
+                    target_date=row["target_date"],
+                    target_note=row["target_note"],
                 )
                 for row in cur.fetchall()
             ]
@@ -100,7 +107,7 @@ def promote_goal(goal_id: str) -> GoalEntry:
                 UPDATE goals
                 SET status = 'active', updated_at = now()
                 WHERE goal_id = %s
-                RETURNING goal_id, title, body, status
+                RETURNING goal_id, title, body, status, horizon, target_date, target_note
                 """,
                 (goal_id,),
             )
@@ -112,6 +119,9 @@ def promote_goal(goal_id: str) -> GoalEntry:
                 title=row["title"],
                 body=row["body"] or "",
                 status=row["status"],
+                horizon=row["horizon"],
+                target_date=row["target_date"],
+                target_note=row["target_note"],
             )
 
 

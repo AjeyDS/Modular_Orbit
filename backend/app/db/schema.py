@@ -259,6 +259,11 @@ def ensure_schema() -> None:
                 )
                 """
             )
+            cur.execute(
+                "ALTER TABLE goals ADD COLUMN IF NOT EXISTS horizon TEXT NOT NULL DEFAULT 'long_term'"
+            )
+            cur.execute("ALTER TABLE goals ADD COLUMN IF NOT EXISTS target_date DATE")
+            cur.execute("ALTER TABLE goals ADD COLUMN IF NOT EXISTS target_note TEXT")
 
             cur.execute(
                 """
