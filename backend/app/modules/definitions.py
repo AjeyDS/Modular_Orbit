@@ -45,6 +45,10 @@ INITIAL_MODULES: tuple[ModuleDefinition, ...] = (
             "gap_max_questions_per_day": 1,
             "dismissed_question_cooldown_days": 7,
             "suggestions_enabled": False,
+            "companion_enabled": True,
+            "companion_persona_preset": "warm",
+            "companion_persona_override": "",
+            "companion_checkins_per_day": 0,
         },
     ),
     ModuleDefinition(
