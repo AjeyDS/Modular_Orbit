@@ -123,17 +123,43 @@ def test_goal_entry_has_horizon_and_targets() -> None:
     assert {"horizon", "target_date", "target_note"} <= fields
 
 
+def test_goals_bucket_not_seeded_and_archived(tmp_path) -> None:
+    from app.user_model.story_buckets import DEFAULT_STORY_BUCKETS, ensure_story_buckets
+
+    assert all(seed.stable_key != "goals" for seed in DEFAULT_STORY_BUCKETS)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO story_buckets (
+                    stable_key, file_path, display_name, description, is_splittable, status
+                )
+                VALUES ('goals', %s, 'Goals', 'legacy', FALSE, 'active')
+                ON CONFLICT (stable_key) DO NOTHING
+                """,
+                (str(tmp_path / "goals.md"),),
+            )
+        conn.commit()
+    ensure_story_buckets(tmp_path)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM story_buckets WHERE stable_key = 'goals'")
+            row = cur.fetchone()
+            cur.execute("SELECT COUNT(*) c FROM story_buckets WHERE status = 'active'")
+            active = cur.fetchone()["c"]
+    assert row is None or row["status"] == "archived"
+    assert active == 7
+
+
 def test_seed_story_buckets_create_stable_rows_with_content(tmp_path) -> None:
     with connect() as conn:
         ensure_story_buckets(tmp_path, conn)
         buckets = list_story_buckets(conn)
 
         stable_keys = [bucket["stable_key"] for bucket in buckets]
-        assert stable_keys[:3] == ["who_am_i", "goals", "interests_and_works"]
-
-        goals_bucket = next(bucket for bucket in buckets if bucket["stable_key"] == "goals")
-        assert goals_bucket["display_name"] == "Goals"
-        assert goals_bucket["content"].startswith("# Goals")
+        assert stable_keys[:2] == ["who_am_i", "interests_and_works"]
+        assert "goals" not in stable_keys
+        assert len(stable_keys) == 7
         conn.rollback()
 
 

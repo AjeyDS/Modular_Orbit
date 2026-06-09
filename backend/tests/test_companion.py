@@ -170,7 +170,7 @@ def test_question_generation_falls_back_to_foundational_when_llm_down(tmp_path) 
     q = generate_companion_question()
     assert q["opening_message"]
     assert q["target_bucket_key"] in {
-        "who_am_i", "goals", "interests_and_works", "career",
+        "who_am_i", "interests_and_works", "career",
         "health", "relationships", "habits", "aspirations",
     }
 

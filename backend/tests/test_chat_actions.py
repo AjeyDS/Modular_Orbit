@@ -113,7 +113,7 @@ def test_router_fallback_selects_buckets_and_breadth(tmp_path) -> None:
     assert narrow.breadth == "narrow"
     assert broad.breadth == "broad"
     assert all(key in {
-        "who_am_i","goals","interests_and_works","career","health","relationships","habits","aspirations"
+        "who_am_i", "interests_and_works", "career", "health", "relationships", "habits", "aspirations"
     } for key in broad.buckets)
     assert 1 <= len(broad.buckets) <= 3
     assert narrow.expansion_terms == []
