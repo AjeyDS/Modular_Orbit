@@ -5,7 +5,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.chat import ChatRequest, ConfirmCaptureProposalRequest, confirm_capture_proposal, respond_to_chat
-from app.chat.actions import _build_answer_context
+from app.chat.actions import _build_answer_context, _detect_capture_proposals
 from app.db import connect, ensure_schema
 from app.main import app
 from app.modules.documents import DocumentCreate, create_document, remove_document
@@ -24,6 +24,16 @@ def _ready(tmp_path) -> None:
 
 def _session_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
+
+
+def test_questions_do_not_produce_capture_suggestions() -> None:
+    assert _detect_capture_proposals("what's my EAD start date?") == []
+    assert _detect_capture_proposals("when is my appointment?") == []
+
+
+def test_explicit_add_still_works_inside_a_question_form() -> None:
+    proposals = _detect_capture_proposals("add this to tasks: renew passport")
+    assert proposals and proposals[0].module_id == "tasks"
 
 
 def test_fast_mode_attaches_no_buckets(tmp_path) -> None:

@@ -197,10 +197,23 @@ def confirm_capture_proposal(request: ConfirmCaptureProposalRequest) -> ConfirmC
     )
 
 
+def _is_question_or_lookup(message: str) -> bool:
+    text = message.strip().lower()
+    if text.endswith("?"):
+        return True
+    first = text.split()[0] if text.split() else ""
+    return first in {
+        "what", "when", "where", "who", "why", "how", "which",
+        "is", "are", "do", "does", "did", "can", "could", "should", "will",
+    }
+
+
 def _detect_capture_proposals(message: str) -> list[DetectedProposal]:
     explicit = _detect_explicit(message)
     if explicit:
         return [explicit]
+    if _is_question_or_lookup(message):
+        return []
 
     suggested = _detect_suggested_with_llm(message) or _detect_suggested(message)
     return [suggested] if suggested else []
@@ -212,8 +225,8 @@ def _detect_suggested_with_llm(message: str) -> DetectedProposal | None:
         "Detect whether the user message contains a clear Life-Item-Shaped Intent: "
         "a clear verb-object intent or durable life-data statement that maps to one "
         "module. Do not create suggestions for casual questions, greetings, or vague "
-        "thinking. Confidence must be one of low, medium, high and is a discrete "
-        "bucket, not a probability."
+        "thinking. Never propose for questions or information lookups. Confidence must "
+        "be one of low, medium, high and is a discrete bucket, not a probability."
     )
     prompt = f"""
 Available modules:
