@@ -1071,7 +1071,7 @@ def _modules_fallback(message: str) -> list[str]:
         modules.append("tasks")
     if re.search(r"\b(plan|progress|step|milestone)\b", lowered):
         modules.append("plans")
-    if re.search(r"\b(goal|aspir|aiming)\b", lowered):
+    if re.search(r"(goal|aspir|aiming)", lowered):
         modules.append("goals")
     if re.search(r"\b(routine|habit|streak|daily)\b", lowered):
         modules.append("routines")

@@ -128,6 +128,10 @@ def test_router_selects_modules_via_lexical_fallback() -> None:
     assert "routines" in d2.modules
     d3 = _route_and_classify("tell me a story about the ocean")
     assert d3.modules == []
+    d4 = _route_and_classify("my short-term goals?")
+    assert "goals" in d4.modules
+    d5 = _route_and_classify("how far is my OPT plan?")
+    assert "plans" in d5.modules
     assert d1.modules == [m for m in d1.modules if m in QUERYABLE_MODULES]
 
 

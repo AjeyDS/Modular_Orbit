@@ -63,6 +63,21 @@ def test_stream_emits_checking_state_for_structured_query(tmp_path) -> None:
     assert stages.index("retrieving") > stages.index("checking_state")
 
 
+def test_stream_skips_checking_state_for_non_structured_query(tmp_path) -> None:
+    _ready(tmp_path)
+    events = list(
+        respond_to_chat_stream(
+            ChatRequest(
+                session_id=f"s1-{uuid4().hex}",
+                mode="understanding",
+                message="tell me a story about the ocean",
+            )
+        )
+    )
+    stages = [e["stage"] for e in events]
+    assert "checking_state" not in stages
+
+
 def test_sse_endpoint_streams_events(tmp_path) -> None:
     _ready(tmp_path)
     client = TestClient(app)
