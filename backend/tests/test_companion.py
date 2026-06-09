@@ -401,3 +401,92 @@ def test_filler_user_turn_records_message_but_no_log(tmp_path) -> None:
                 """
             )
             assert cur.fetchone()["c"] == 0
+
+
+# --- Bug fixes: bucket-key normalization, log status, gate tightening ---
+
+import app.modules.companion as companion
+from app.modules.companion import (
+    _normalize_bucket_key,
+    generate_companion_question,
+    get_or_create_companion_session,
+    is_meaningful_reply,
+    record_user_turn,
+    synthesize_companion_session,
+)
+
+
+def test_normalize_bucket_key_maps_display_names_and_rejects_invented() -> None:
+    assert _normalize_bucket_key("Aspirations") == "aspirations"
+    assert _normalize_bucket_key("Who Am I") == "who_am_i"
+    assert _normalize_bucket_key("career") == "career"
+    assert _normalize_bucket_key("employment_authorization_document") is None
+    assert _normalize_bucket_key(None) is None
+
+
+def test_generate_question_accepts_display_name_key(tmp_path, monkeypatch) -> None:
+    _ready_companion(tmp_path)
+    monkeypatch.setattr(
+        companion, "generate_json",
+        lambda *a, **k: {"opening_message": "What pulled at you this week?",
+                         "target_bucket_key": "Aspirations", "quick_replies": [], "rationale": "x"},
+    )
+    q = generate_companion_question()
+    assert q["target_bucket_key"] == "aspirations"
+    assert q["rationale"] != "generic check-in"  # did NOT fall back
+
+
+def test_synthesis_normalizes_known_and_drops_invented(tmp_path, monkeypatch) -> None:
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+    record_user_turn(session["id"], "My EAD card was approved today")
+    monkeypatch.setattr(
+        companion, "generate_json",
+        lambda *a, **k: {"facts": [
+            {"bucket_key": "Career", "text": "EAD work authorization approved."},
+            {"bucket_key": "employment_authorization_document", "text": "dropped"},
+        ]},
+    )
+    synthesize_companion_session(session["id"])
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT bucket_update->>'text' FROM ("
+                "SELECT source_event AS bucket_update FROM bucket_updates "
+                "WHERE source_event->>'source'='curious_companion') s"
+            )
+            cur.execute(
+                "SELECT update_text, source_event->>'bucket_key' bk FROM bucket_updates "
+                "WHERE source_event->>'source'='curious_companion'"
+            )
+            rows = cur.fetchall()
+    assert len(rows) == 1
+    assert rows[0]["bk"] == "career"
+    assert "EAD" in rows[0]["update_text"]
+
+
+def test_companion_log_marked_terminal(tmp_path) -> None:
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+    record_user_turn(session["id"], "My EAD card was approved today")
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT connection_status cs, chunk_status ch, bucket_update_status bu
+                FROM life_items li JOIN module_instances mi ON mi.id = li.module_instance_id
+                WHERE mi.module_id = 'logs' AND li.source->>'kind' = 'companion_capture'
+                """
+            )
+            row = cur.fetchone()
+    assert row["cs"] == "complete"
+    assert row["ch"] == "not_needed"
+    assert row["bu"] == "not_needed"
+
+
+def test_gate_rejects_vague_status_keeps_real_update() -> None:
+    # LLM disabled under pytest -> exercises the deterministic fallback.
+    assert is_meaningful_reply("It's going good") is False
+    assert is_meaningful_reply("its going good") is False
+    assert is_meaningful_reply("fine") is False
+    assert is_meaningful_reply("My EAD card was approved today") is True

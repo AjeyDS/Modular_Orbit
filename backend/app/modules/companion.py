@@ -52,6 +52,15 @@ _FILLER = {
     "yep", "nope", "cool", "great", "lol", "haha",
 }
 
+# Vague status / pleasantry replies that carry no durable signal about the
+# person. Kept out of the user model and Logs (deterministic-fallback path).
+_VAGUE_STATUS = {
+    "good", "im good", "i'm good", "all good", "pretty good", "going good",
+    "its going good", "it's going good", "fine", "im fine", "i'm fine",
+    "alright", "not much", "nothing much", "same as usual", "busy", "tired",
+    "meh", "nothing", "the same", "as usual",
+}
+
 _END_MARKERS = (
     "bye",
     "goodbye",
@@ -138,15 +147,16 @@ def is_meaningful_reply(text: str) -> bool:
     try:
         data = generate_json(
             f'Reply:\n"{text}"\n\nReturn JSON: {{"meaningful": bool}}. '
-            "meaningful=true only if the reply states a fact, update, feeling, or "
-            "preference worth remembering about the person; false for greetings/acks/filler.",
+            "meaningful=true ONLY for a concrete fact, event, plan, decision, or "
+            "specific preference about the person. Vague status or pleasantries "
+            '("it\'s going good", "fine", "busy", "not much") are NOT meaningful.',
             system="You judge whether a chat reply carries durable signal about the person. Return only JSON.",
             temperature=0.0,
             max_output_tokens=80,
         )
         return bool(data.get("meaningful", False))
     except (LLMUnavailable, Exception):
-        if cleaned in _FILLER:
+        if cleaned in _FILLER or cleaned in _VAGUE_STATUS:
             return False
         return len(cleaned.split()) >= 3
 
@@ -169,7 +179,7 @@ def record_user_turn(
     if not capture or not is_meaningful_reply(text):
         return
 
-    create_log(
+    log = create_log(
         LogCreate(
             text=text,
             request_id=f"companion-capture-{message_id}",
@@ -177,6 +187,22 @@ def record_user_turn(
         ),
         review=False,
     )
+    # The companion handles user-model enrichment via session-end synthesis, not
+    # per-log Connection Review. Mark the log's async statuses terminal so the
+    # Logs UI does not show perpetual "pending" badges.
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE life_items
+                SET connection_status = 'complete',
+                    chunk_status = 'not_needed',
+                    bucket_update_status = 'not_needed',
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (log.id,),
+            )
 
 
 def build_companion_context() -> str:
@@ -272,6 +298,25 @@ _QUESTION_STYLE = (
     "the person can also type freely."
 )
 
+_ALLOWED_KEYS_LINE = (
+    "Allowed bucket_key values — use EXACTLY one of these stable keys, lowercase, "
+    "never a display name or an invented key: " + ", ".join(sorted(KNOWN_BUCKET_KEYS)) + "."
+)
+
+
+def _normalize_bucket_key(raw: Any) -> str | None:
+    """Map an LLM-returned bucket key to a known stable key, or None if unknown.
+
+    Tolerates display names ("Aspirations", "Who Am I") and casing/spacing, but
+    rejects invented keys (e.g. "employment_authorization_document").
+    """
+    if not isinstance(raw, str):
+        return None
+    key = raw.strip().lower().replace(" ", "_").replace("-", "_")
+    while "__" in key:
+        key = key.replace("__", "_")
+    return key if key in KNOWN_BUCKET_KEYS else None
+
 
 def generate_companion_question(exclude_bucket: str | None = None) -> dict[str, Any]:
     settings = _companion_settings()
@@ -279,7 +324,7 @@ def generate_companion_question(exclude_bucket: str | None = None) -> dict[str, 
         preset=str(settings.get("companion_persona_preset", "warm")),
         override=str(settings.get("companion_persona_override", "")),
     )
-    system_parts = [persona, _QUESTION_STYLE]
+    system_parts = [persona, _QUESTION_STYLE, _ALLOWED_KEYS_LINE]
     if exclude_bucket:
         system_parts.append(
             f"Do not target the '{exclude_bucket}' bucket; choose a different area."
@@ -295,8 +340,8 @@ def generate_companion_question(exclude_bucket: str | None = None) -> dict[str, 
             temperature=0.3,
             max_output_tokens=400,
         )
-        bucket_key = data.get("target_bucket_key")
-        if bucket_key not in KNOWN_BUCKET_KEYS:
+        bucket_key = _normalize_bucket_key(data.get("target_bucket_key"))
+        if bucket_key is None:
             raise ValueError("invalid bucket key")
         opening = str(data.get("opening_message") or "").strip()
         if not opening:
@@ -562,7 +607,7 @@ def synthesize_companion_session(session_id: UUID | str) -> None:
             'Return JSON: {"facts":[{"bucket_key":"...", "text":"..."}]}',
             system=(
                 "Extract durable facts about the person from this companion conversation. "
-                "Return only JSON."
+                "Return only JSON. " + _ALLOWED_KEYS_LINE
             ),
             temperature=0.1,
             max_output_tokens=600,
@@ -578,8 +623,8 @@ def synthesize_companion_session(session_id: UUID | str) -> None:
     for fact in raw_facts:
         if not isinstance(fact, dict):
             continue
-        bucket_key = fact.get("bucket_key")
-        if bucket_key not in KNOWN_BUCKET_KEYS:
+        bucket_key = _normalize_bucket_key(fact.get("bucket_key"))
+        if bucket_key is None:
             continue
         text = str(fact.get("text") or "").strip()
         if text:
