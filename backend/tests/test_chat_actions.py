@@ -187,7 +187,7 @@ def test_standard_chat_fallback_surfaces_retrieved_document_context(tmp_path) ->
         )
     )
 
-    assert "retrieve Orbit context" in response.answer
+    assert "retrieve context for this turn" in response.answer
     assert "Resume.pdf" in response.answer
     assert "RAG" in response.answer
 
