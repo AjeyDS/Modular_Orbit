@@ -38,12 +38,26 @@ def test_stream_emits_stages_then_answer_and_done(tmp_path) -> None:
         )
     )
     stages = [e["stage"] for e in events]
-    assert stages[0] in {"routing", "retrieving"}
+    assert stages[0] == "thinking"
+    assert "routing" in stages
     assert "writing" in stages
     assert any(e["stage"] == "answer" for e in events)
     assert stages[-1] == "done"
     done = events[-1]
     assert "suggestions" in done
+
+
+def test_stream_emits_thinking_first(tmp_path) -> None:
+    _ready(tmp_path)
+    events = list(
+        respond_to_chat_stream(
+            ChatRequest(session_id=f"s1-{uuid4().hex}", mode="understanding", message="hi")
+        )
+    )
+    stages = [e.get("stage") for e in events]
+    assert stages[0] == "thinking"
+    assert "routing" in stages
+    assert stages[-1] == "done"
 
 
 def test_stream_emits_checking_state_for_structured_query(tmp_path) -> None:
@@ -60,6 +74,7 @@ def test_stream_emits_checking_state_for_structured_query(tmp_path) -> None:
     stages = [e["stage"] for e in events]
     assert "checking_state" in stages
     assert stages.index("checking_state") > stages.index("routing")
+    assert stages.index("routing") > stages.index("thinking")
     assert stages.index("retrieving") > stages.index("checking_state")
 
 

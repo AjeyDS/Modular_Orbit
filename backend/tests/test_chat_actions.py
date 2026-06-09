@@ -328,11 +328,13 @@ def test_system_prompt_mentions_clean_formatting() -> None:
 
 
 def test_understanding_prompt_has_focus_ranking_guidance() -> None:
-    from app.chat.actions import _chat_system_prompt
+    from app.chat.actions import _FOCUS_APPROACH, _chat_system_prompt
 
     prompt = _chat_system_prompt("understanding").lower()
-    assert "prioritize" in prompt or "rank" in prompt
-    assert "due" in prompt
+    assert "approach" in prompt
+    focus = _FOCUS_APPROACH.lower()
+    assert "prioritize" in focus or "rank" in focus
+    assert "due" in focus
 
 
 def test_prompt_discourages_raw_field_labels() -> None:
@@ -351,11 +353,25 @@ def test_prompt_allows_advice_but_guards_personal_facts() -> None:
 
 
 def test_understanding_prompt_has_gap_instruction() -> None:
-    from app.chat.actions import _chat_system_prompt
+    from app.chat.actions import _GAP_APPROACH, _chat_system_prompt
 
     prompt = _chat_system_prompt("understanding").lower()
-    assert "have not" in prompt or "haven't" in prompt or "not already listed" in prompt
-    assert "fabricate" in prompt or "do not invent specific" in prompt
+    assert "approach" in prompt
+    gap = _GAP_APPROACH.lower()
+    assert "have not" in gap or "haven't" in gap or "not already listed" in gap
+    assert "fabricate" in gap or "do not invent specific" in gap
+
+
+def test_answer_prompt_includes_plan_approach() -> None:
+    from app.chat.actions import ChatRequest, ThinkingPlan, _answer_prompt
+
+    prompt = _answer_prompt(
+        ChatRequest(session_id="s", mode="understanding", message="x"),
+        context="ctx",
+        suggestions=[],
+        plan=ThinkingPlan("gap_analysis", "Find gaps beyond their inputs.", ""),
+    )
+    assert "Find gaps beyond their inputs." in prompt
 
 
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:

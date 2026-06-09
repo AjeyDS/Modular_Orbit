@@ -251,9 +251,12 @@ def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
 
     chunks: list = []
     decision: RouteDecision | None = None
+    plan: ThinkingPlan | None = None
     if request.mode == "understanding":
+        yield {"stage": "thinking"}
+        plan = _think(request.message)
         yield {"stage": "routing"}
-        decision = _route_and_classify(request.message)
+        decision = _route_and_classify(request.message, plan)
         if decision.modules:
             yield {"stage": "checking_state"}
         yield {"stage": "retrieving"}
@@ -266,11 +269,11 @@ def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
         context = _build_understanding_context(request.message, decision, chunks)
     else:
         yield {"stage": "retrieving"}
-        context, chunks, decision = _prepare_chat_context(request.mode, request.message)
+        context, chunks, decision, _ = _prepare_chat_context(request.mode, request.message)
 
     yield {"stage": "writing"}
     system = _chat_system_prompt(request.mode)
-    prompt = _answer_prompt(request, context, suggestions)
+    prompt = _answer_prompt(request, context, suggestions, plan=plan)
     answer_parts: list[str] = []
     try:
         for delta in generate_text_stream(
@@ -709,13 +712,16 @@ def _answer_prompt(
     request: ChatRequest,
     context: str,
     suggestions: list[CaptureProposalPreview],
+    plan: ThinkingPlan | None = None,
 ) -> str:
     suggestion_context = "\n".join(
         f"- {proposal.module_id}: {proposal.title} ({proposal.confidence_bucket})"
         for proposal in suggestions
     ) or "None"
-    return f"""
-User message:
+    approach_prefix = ""
+    if plan is not None and plan.approach.strip():
+        approach_prefix = f"Approach for this answer: {plan.approach.strip()}\n\n"
+    return f"""{approach_prefix}User message:
 {request.message}
 
 Mode:
@@ -737,10 +743,21 @@ def _generate_chat_answer(
     request: ChatRequest,
     suggestions: list[CaptureProposalPreview],
 ) -> tuple[str, list[SourceRef]]:
-    context, chunks, decision = _prepare_chat_context(request.mode, request.message)
+    plan: ThinkingPlan | None = None
+    if request.mode == "understanding":
+        plan = _think(request.message)
+        decision = _route_and_classify(request.message, plan)
+        chunks = _understanding_retrieval(
+            request.message,
+            decision,
+            limit=8 if decision.breadth == "broad" else 4,
+        )
+        context = _build_understanding_context(request.message, decision, chunks)
+    else:
+        context, chunks, decision, _ = _prepare_chat_context(request.mode, request.message)
     sources = _collect_sources(chunks, decision)
     system = _chat_system_prompt(request.mode)
-    prompt = _answer_prompt(request, context, suggestions)
+    prompt = _answer_prompt(request, context, suggestions, plan=plan)
     try:
         answer = generate_text(
             prompt,
@@ -775,18 +792,8 @@ def _chat_system_prompt(mode: ChatMode) -> str:
         return f"{base} This is Fast Chat: answer directly from retrieved knowledge; minimal assumptions."
     return (
         f"{base} This is Understanding Chat: use the selected Story Buckets to frame and personalize, "
-        "but answer the user's actual question; do not wander. "
-        "If the user asks what to focus on or how to prioritize, use the Structured data "
-        "to RANK concrete items (tasks, plans, routines) by urgency (soonest or overdue "
-        "due dates first), then priority, then alignment to active goals. Recommend an "
-        "ordered short list (top 3), each with a one-line reason, leading with the single "
-        "most important. Decide; don't just describe. "
-        "When the person asks what to learn, improve, or do next, don't just recombine "
-        "what they already have. Compare their current skills, projects, and routines "
-        "against what their goals typically require, and surface 1–3 concrete things "
-        "they have NOT already listed (a real gap), each with a one-line why. Suggest "
-        "skill areas, topics, and types of resources — do not fabricate specific course "
-        "names, products, or links."
+        "but answer the user's actual question; do not wander. Follow the provided Approach "
+        "when one is given in the user prompt."
     )
 
 
@@ -921,21 +928,22 @@ def _structured_context(modules: list[str]) -> str:
 
 def _prepare_chat_context(
     mode: ChatMode, message: str
-) -> tuple[str, list, RouteDecision | None]:
+) -> tuple[str, list, RouteDecision | None, ThinkingPlan | None]:
     if mode == "fast":
         chunks = retrieve_chunks(message, limit=4)
         sections = [_chunks_to_context(chunks), _connection_context(message), _goal_context()]
         context = "\n\n".join(s for s in sections if s.strip()) or "No Orbit context found yet."
-        return context, chunks, None
+        return context, chunks, None, None
 
-    decision = _route_and_classify(message)
+    plan = _think(message)
+    decision = _route_and_classify(message, plan)
     chunks = _understanding_retrieval(message, decision, limit=8 if decision.breadth == "broad" else 4)
     context = _build_understanding_context(message, decision, chunks)
-    return context, chunks, decision
+    return context, chunks, decision, plan
 
 
 def _build_answer_context(mode: ChatMode, message: str) -> str:
-    context, _, _ = _prepare_chat_context(mode, message)
+    context, _, _, _ = _prepare_chat_context(mode, message)
     return context
 
 
