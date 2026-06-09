@@ -175,6 +175,8 @@ def respond_to_chat(request: ChatRequest) -> ChatResponse:
         upsert_session_for_message,
     )
 
+    history = _recent_history(request.session_id)
+
     with transaction() as conn:
         upsert_session_for_message(
             conn,
@@ -196,7 +198,7 @@ def respond_to_chat(request: ChatRequest) -> ChatResponse:
         if _should_surface(request.session_id, proposal)
     ]
 
-    answer, sources = _generate_chat_answer(request, suggestions)
+    answer, sources = _generate_chat_answer(request, suggestions, history)
 
     suggestions_json: list[dict[str, Any]] | None
     if suggestions:
@@ -229,6 +231,8 @@ def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
         upsert_session_for_message,
     )
 
+    history = _recent_history(request.session_id)
+
     with transaction() as conn:
         upsert_session_for_message(
             conn,
@@ -255,26 +259,31 @@ def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
     plan: ThinkingPlan | None = None
     if request.mode == "understanding":
         yield {"stage": "thinking"}
-        plan = _think(request.message)
+        plan = _think(request.message, history)
+        query = plan.resolved_question or request.message
         yield {"stage": "routing"}
-        decision = _route_and_classify(request.message, plan)
+        decision = _route_and_classify(query, plan)
         if decision.modules:
             yield {"stage": "checking_state"}
         yield {"stage": "retrieving"}
         chunks = _understanding_retrieval(
-            request.message,
+            query,
             decision,
             limit=8 if decision.breadth == "broad" else 4,
         )
         yield {"stage": "reading_story"}
-        context = _build_understanding_context(request.message, decision, chunks)
+        context = _build_understanding_context(query, decision, chunks)
     else:
         yield {"stage": "retrieving"}
-        context, chunks, decision, _ = _prepare_chat_context(request.mode, request.message)
+        context, chunks, decision, _ = _prepare_chat_context(
+            request.mode, request.message, history
+        )
 
     yield {"stage": "writing"}
     system = _chat_system_prompt(request.mode)
-    prompt = _answer_prompt(request, context, suggestions, plan=plan)
+    prompt = _answer_prompt(
+        request.message, context, suggestions, mode=request.mode, plan=plan, history=history
+    )
     answer_parts: list[str] = []
     try:
         for delta in generate_text_stream(
@@ -710,10 +719,13 @@ def _mode_answer(mode: ChatMode, has_suggestion: bool) -> str:
 
 
 def _answer_prompt(
-    request: ChatRequest,
+    message: str,
     context: str,
     suggestions: list[CaptureProposalPreview],
+    *,
+    mode: ChatMode = "understanding",
     plan: ThinkingPlan | None = None,
+    history: list[tuple[str, str]] | None = None,
 ) -> str:
     suggestion_context = "\n".join(
         f"- {proposal.module_id}: {proposal.title} ({proposal.confidence_bucket})"
@@ -722,11 +734,18 @@ def _answer_prompt(
     approach_prefix = ""
     if plan is not None and plan.approach.strip():
         approach_prefix = f"Approach for this answer: {plan.approach.strip()}\n\n"
-    return f"""{approach_prefix}User message:
-{request.message}
+    history_block = ""
+    if history:
+        rendered = "\n".join(f"{role}: {content}" for role, content in history)
+        history_block = (
+            "Recent conversation (oldest first; the user message below continues it):\n"
+            f"{rendered}\n\n"
+        )
+    return f"""{approach_prefix}{history_block}User message:
+{message}
 
 Mode:
-{request.mode}
+{mode}
 
 Available Orbit context:
 {context}
@@ -743,22 +762,16 @@ the user can save the preview; do not pressure them.
 def _generate_chat_answer(
     request: ChatRequest,
     suggestions: list[CaptureProposalPreview],
+    history: list[tuple[str, str]] | None = None,
 ) -> tuple[str, list[SourceRef]]:
-    plan: ThinkingPlan | None = None
-    if request.mode == "understanding":
-        plan = _think(request.message)
-        decision = _route_and_classify(request.message, plan)
-        chunks = _understanding_retrieval(
-            request.message,
-            decision,
-            limit=8 if decision.breadth == "broad" else 4,
-        )
-        context = _build_understanding_context(request.message, decision, chunks)
-    else:
-        context, chunks, decision, _ = _prepare_chat_context(request.mode, request.message)
+    context, chunks, decision, plan = _prepare_chat_context(
+        request.mode, request.message, history
+    )
     sources = _collect_sources(chunks, decision)
     system = _chat_system_prompt(request.mode)
-    prompt = _answer_prompt(request, context, suggestions, plan=plan)
+    prompt = _answer_prompt(
+        request.message, context, suggestions, mode=request.mode, plan=plan, history=history
+    )
     try:
         answer = generate_text(
             prompt,
@@ -928,7 +941,7 @@ def _structured_context(modules: list[str]) -> str:
 
 
 def _prepare_chat_context(
-    mode: ChatMode, message: str
+    mode: ChatMode, message: str, history: list[tuple[str, str]] | None = None
 ) -> tuple[str, list, RouteDecision | None, ThinkingPlan | None]:
     if mode == "fast":
         chunks = retrieve_chunks(message, limit=4)
@@ -936,15 +949,18 @@ def _prepare_chat_context(
         context = "\n\n".join(s for s in sections if s.strip()) or "No Orbit context found yet."
         return context, chunks, None, None
 
-    plan = _think(message)
-    decision = _route_and_classify(message, plan)
-    chunks = _understanding_retrieval(message, decision, limit=8 if decision.breadth == "broad" else 4)
-    context = _build_understanding_context(message, decision, chunks)
+    plan = _think(message, history)
+    query = plan.resolved_question or message
+    decision = _route_and_classify(query, plan)
+    chunks = _understanding_retrieval(query, decision, limit=8 if decision.breadth == "broad" else 4)
+    context = _build_understanding_context(query, decision, chunks)
     return context, chunks, decision, plan
 
 
-def _build_answer_context(mode: ChatMode, message: str) -> str:
-    context, _, _, _ = _prepare_chat_context(mode, message)
+def _build_answer_context(
+    mode: ChatMode, message: str, *, history: list[tuple[str, str]] | None = None
+) -> str:
+    context, _, _, _ = _prepare_chat_context(mode, message, history)
     return context
 
 

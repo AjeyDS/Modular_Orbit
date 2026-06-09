@@ -366,9 +366,10 @@ def test_answer_prompt_includes_plan_approach() -> None:
     from app.chat.actions import ChatRequest, ThinkingPlan, _answer_prompt
 
     prompt = _answer_prompt(
-        ChatRequest(session_id="s", mode="understanding", message="x"),
+        message="x",
         context="ctx",
         suggestions=[],
+        mode="understanding",
         plan=ThinkingPlan("gap_analysis", "Find gaps beyond their inputs.", ""),
     )
     assert "Find gaps beyond their inputs." in prompt
@@ -667,3 +668,37 @@ def test_think_resolves_with_history(monkeypatch) -> None:
     p = actions._think("prioritize this", hist)
     assert "MLOps" in p.resolved_question
     assert "what can I learn" in captured["prompt"] or "MLOps" in captured["prompt"]
+
+
+def test_resolved_question_drives_retrieval(monkeypatch) -> None:
+    import app.chat.actions as actions
+
+    seen: dict[str, str] = {}
+    monkeypatch.setattr(
+        actions,
+        "_think",
+        lambda m, h=None: actions.ThinkingPlan(
+            "prioritize", "rank", "", resolved_question="prioritize MLOps and Kubernetes"
+        ),
+    )
+
+    def fake_retrieve(q, **k):
+        seen.setdefault("q", q)
+        return []
+
+    monkeypatch.setattr(actions, "retrieve_chunks", fake_retrieve)
+    actions._build_answer_context("understanding", "prioritize this")
+    assert seen["q"] == "prioritize MLOps and Kubernetes" or "MLOps" in seen.get("q", "")
+
+
+def test_answer_prompt_includes_recent_history() -> None:
+    from app.chat.actions import _answer_prompt
+
+    prompt = _answer_prompt(
+        message="x",
+        context="ctx",
+        suggestions=[],
+        plan=None,
+        history=[("user", "what can I learn?"), ("assistant", "MLOps")],
+    )
+    assert "Recent conversation" in prompt and "MLOps" in prompt
