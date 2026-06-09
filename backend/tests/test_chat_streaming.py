@@ -46,6 +46,23 @@ def test_stream_emits_stages_then_answer_and_done(tmp_path) -> None:
     assert "suggestions" in done
 
 
+def test_stream_emits_checking_state_for_structured_query(tmp_path) -> None:
+    _ready(tmp_path)
+    events = list(
+        respond_to_chat_stream(
+            ChatRequest(
+                session_id=f"s1-{uuid4().hex}",
+                mode="understanding",
+                message="what tasks are overdue?",
+            )
+        )
+    )
+    stages = [e["stage"] for e in events]
+    assert "checking_state" in stages
+    assert stages.index("checking_state") > stages.index("routing")
+    assert stages.index("retrieving") > stages.index("checking_state")
+
+
 def test_sse_endpoint_streams_events(tmp_path) -> None:
     _ready(tmp_path)
     client = TestClient(app)

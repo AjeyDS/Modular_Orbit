@@ -150,6 +150,25 @@ def test_structured_context_empty_when_no_modules() -> None:
     assert _structured_context([]) == ""
 
 
+def test_understanding_context_includes_structured_block_for_task_query(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.modules.tasks import TaskCreate, create_task
+
+    create_task(TaskCreate(title="File taxes"), review=False)
+    ctx = _build_answer_context("understanding", "what tasks are overdue?")
+    assert "Structured data" in ctx
+    assert "File taxes" in ctx
+
+
+def test_fast_mode_has_no_structured_block(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.modules.tasks import TaskCreate, create_task
+
+    create_task(TaskCreate(title="File taxes"), review=False)
+    ctx = _build_answer_context("fast", "what tasks are overdue?")
+    assert "Structured data" not in ctx
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))

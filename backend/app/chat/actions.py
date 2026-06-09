@@ -184,6 +184,8 @@ def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
     if request.mode == "understanding":
         yield {"stage": "routing"}
         decision = _route_and_classify(request.message)
+        if decision.modules:
+            yield {"stage": "checking_state"}
         yield {"stage": "retrieving"}
         chunks = _understanding_retrieval(
             request.message,
@@ -812,8 +814,10 @@ def _build_understanding_context(
     message: str, decision: RouteDecision, chunks: list
 ) -> str:
     chunk_block = _chunks_to_context(chunks)
+    structured = _structured_context(decision.modules)
     sections = [
         chunk_block,
+        structured,
         _connection_context(message),
         _selected_bucket_context(decision.buckets),
         _goal_context(),
