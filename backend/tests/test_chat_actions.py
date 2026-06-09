@@ -173,6 +173,34 @@ def test_fast_mode_has_no_structured_block(tmp_path) -> None:
     assert "Structured data" not in ctx
 
 
+def test_collect_sources_dedups_and_labels() -> None:
+    from app.chat.actions import RouteDecision, _collect_sources
+    from app.rag.retrieval import RetrievedChunk
+
+    chunks = [
+        RetrievedChunk(id="1", life_item_id="a", title="OPT Action Plan", content="x", source_type="document"),
+        RetrievedChunk(id="2", life_item_id="a", title="OPT Action Plan", content="y", source_type="document"),
+        RetrievedChunk(id="3", life_item_id="b", title="Resume", content="z", source_type="document"),
+    ]
+    decision = RouteDecision(breadth="broad", buckets=["career"], modules=["tasks"])
+    refs = _collect_sources(chunks, decision)
+    labels = [(r.kind, r.label) for r in refs]
+    assert ("document", "OPT Action Plan") in labels
+    assert ("document", "Resume") in labels
+    assert labels.count(("document", "OPT Action Plan")) == 1
+    assert ("bucket", "career") in labels or any(r.kind == "bucket" for r in refs)
+    assert any(r.kind == "module" and r.label.lower() == "tasks" for r in refs)
+
+
+def test_collect_sources_fast_mode_chunks_only() -> None:
+    from app.chat.actions import _collect_sources
+    from app.rag.retrieval import RetrievedChunk
+
+    chunks = [RetrievedChunk(id="1", life_item_id="a", title="Resume", content="z", source_type="document")]
+    refs = _collect_sources(chunks, None)
+    assert all(r.kind in {"document", "item"} for r in refs)
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))

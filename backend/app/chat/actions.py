@@ -55,6 +55,17 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
 
 
+SourceKind = Literal["document", "item", "bucket", "module"]
+
+
+class SourceRef(BaseModel):
+    kind: SourceKind
+    label: str
+
+
+_MODULE_LABELS = {"tasks": "Tasks", "plans": "Plans", "goals": "Goals", "routines": "Routines"}
+
+
 class CaptureProposalPreview(BaseModel):
     id: UUID
     session_id: str
@@ -719,6 +730,28 @@ def _context_excerpts(context: str, *, limit: int = 4) -> list[str]:
     if not useful:
         useful = [line for line in lines if not line.endswith(":")]
     return [line[:700] for line in useful[:limit]]
+
+
+def _collect_sources(chunks: list, decision: RouteDecision | None = None) -> list[SourceRef]:
+    refs: list[SourceRef] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(kind: SourceKind, label: str) -> None:
+        normalized = (label or "").strip()
+        if not normalized or (kind, normalized.lower()) in seen:
+            return
+        seen.add((kind, normalized.lower()))
+        refs.append(SourceRef(kind=kind, label=normalized))
+
+    for chunk in (chunks or [])[:6]:
+        kind: SourceKind = "document" if getattr(chunk, "source_type", "") == "document" else "item"
+        add(kind, getattr(chunk, "title", ""))
+    if decision is not None:
+        for bucket in getattr(decision, "buckets", []) or []:
+            add("bucket", bucket)
+        for module in getattr(decision, "modules", []) or []:
+            add("module", _MODULE_LABELS.get(module, module))
+    return refs
 
 
 def _structured_tasks_context() -> str:
