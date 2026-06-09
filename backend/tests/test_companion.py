@@ -122,6 +122,56 @@ def test_meaningful_user_turn_creates_capture_and_chunk(tmp_path) -> None:
     assert chunks >= 1
 
 
+def test_companion_context_includes_buckets_and_goals(tmp_path) -> None:
+    from app.modules.companion import build_companion_context
+
+    _ready_companion(tmp_path)
+    ctx = build_companion_context()
+    assert "Story Buckets" in ctx or "buckets" in ctx.lower()
+    assert isinstance(ctx, str) and ctx.strip()
+
+
+def test_question_generation_falls_back_to_foundational_when_llm_down(tmp_path) -> None:
+    from app.modules.companion import generate_companion_question
+
+    _ready_companion(tmp_path)
+    q = generate_companion_question()
+    assert q["opening_message"]
+    assert q["target_bucket_key"] in {
+        "who_am_i", "goals", "interests_and_works", "career",
+        "health", "relationships", "habits", "aspirations",
+    }
+
+
+def test_question_generation_uses_llm_when_available(tmp_path, monkeypatch) -> None:
+    _ready_companion(tmp_path)
+    import app.modules.companion as companion
+
+    monkeypatch.setattr(
+        companion, "generate_json",
+        lambda *a, **k: {
+            "opening_message": "How did the EAD news land for you?",
+            "target_bucket_key": "career",
+            "quick_replies": [],
+            "rationale": "follow up on milestone",
+        },
+    )
+    q = companion.generate_companion_question()
+    assert q["opening_message"] == "How did the EAD news land for you?"
+    assert q["target_bucket_key"] == "career"
+
+
+def test_volunteered_fact_gets_short_ack_not_a_question(tmp_path, monkeypatch) -> None:
+    _ready_companion(tmp_path)
+    import app.modules.companion as companion
+
+    monkeypatch.setattr(companion, "generate_text", lambda *a, **k: "Got it — that's great.")
+    reply = companion.respond_to_user_turn("My EAD card was approved today")
+    assert reply["kind"] == "acknowledge"
+    assert reply["message"]
+    assert "quick_replies" not in reply or reply["quick_replies"] == []
+
+
 def test_filler_user_turn_records_message_but_no_capture(tmp_path) -> None:
     from app.modules.companion import get_or_create_companion_session, record_user_turn
 

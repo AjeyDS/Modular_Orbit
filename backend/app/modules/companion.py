@@ -12,6 +12,7 @@ from app.db import transaction
 from app.lifecycle import create_life_item
 from app.llm import LLMUnavailable, generate_json
 from app.modules.curious import _mark_session_lifecycle_not_needed
+from app.user_model import list_goals
 
 _FILLER = {
     "ok", "okay", "k", "thanks", "thank you", "thx", "yes", "no", "sure",
@@ -147,6 +148,72 @@ def record_user_turn(session_id: UUID | str, text: str) -> None:
                 """,
                 (capture_id,),
             )
+
+
+def build_companion_context() -> str:
+    sections: list[str] = []
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT stable_key, display_name, description, content
+                FROM story_buckets
+                WHERE status = 'active'
+                ORDER BY display_name
+                """
+            )
+            bucket_rows = cur.fetchall()
+            cur.execute(
+                """
+                SELECT title
+                FROM life_items
+                WHERE item_type IN ('task', 'plan')
+                    AND lifecycle_status = 'active'
+                ORDER BY created_at DESC
+                LIMIT 10
+                """
+            )
+            task_rows = cur.fetchall()
+            cur.execute(
+                """
+                SELECT DISTINCT payload ->> 'target_bucket_key' AS bucket_key
+                FROM life_items
+                WHERE item_type IN ('curious_answer', 'curious_capture')
+                    AND lifecycle_status <> 'deleted'
+                    AND payload ->> 'target_bucket_key' IS NOT NULL
+                """
+            )
+            asked_keys = {row["bucket_key"] for row in cur.fetchall() if row["bucket_key"]}
+
+    if bucket_rows:
+        lines = []
+        for row in bucket_rows:
+            content = (row.get("content") or "")[:400].strip()
+            lines.append(f"- {row['display_name']}: {row['description']}\n{content}")
+        sections.append("Story Buckets:\n" + "\n".join(lines))
+
+    goals = list_goals()
+    if goals:
+        sections.append(
+            "Goals:\n"
+            + "\n".join(
+                f"- {goal.status}: {goal.title}\n{(goal.body or '')[:200]}"
+                for goal in goals[:10]
+            )
+        )
+
+    if task_rows:
+        sections.append(
+            "Active tasks/plans:\n"
+            + "\n".join(f"- {row['title']}" for row in task_rows)
+        )
+
+    if asked_keys:
+        sections.append("Already-asked bucket coverage: " + ", ".join(sorted(asked_keys)))
+
+    context = "\n\n".join(sections)
+    return context[:2000]
 
 
 def _derive_title(text: str) -> str:
