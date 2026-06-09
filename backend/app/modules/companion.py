@@ -10,8 +10,9 @@ from psycopg.types.json import Jsonb
 
 from app.db import transaction
 from app.lifecycle import create_life_item
+from app.chat.actions import KNOWN_BUCKET_KEYS
 from app.llm import LLMUnavailable, generate_json
-from app.modules.curious import _mark_session_lifecycle_not_needed
+from app.modules.curious import _mark_session_lifecycle_not_needed, get_curious_page_state
 from app.user_model import list_goals
 
 _FILLER = {
@@ -214,6 +215,83 @@ def build_companion_context() -> str:
 
     context = "\n\n".join(sections)
     return context[:2000]
+
+
+def _companion_settings() -> dict[str, Any]:
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mi.settings, m.default_settings
+                FROM module_instances mi
+                JOIN modules m ON m.id = mi.module_id
+                WHERE m.id = 'curious'
+                ORDER BY mi.created_at ASC
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+    if row is None:
+        return {}
+    defaults = dict(row["default_settings"] or {})
+    instance = dict(row["settings"] or {})
+    return {**defaults, **instance}
+
+
+def generate_companion_question() -> dict[str, Any]:
+    settings = _companion_settings()
+    persona = build_persona_prompt(
+        preset=str(settings.get("companion_persona_preset", "warm")),
+        override=str(settings.get("companion_persona_override", "")),
+    )
+    context = build_companion_context()
+    try:
+        data = generate_json(
+            f"Context:\n{context}\n\n"
+            'Return JSON: {"opening_message":"...", "target_bucket_key":"...", '
+            '"quick_replies":[{"id":"...","label":"..."}], "rationale":"..."}',
+            system=persona,
+            temperature=0.3,
+            max_output_tokens=400,
+        )
+        bucket_key = data.get("target_bucket_key")
+        if bucket_key not in KNOWN_BUCKET_KEYS:
+            raise ValueError("invalid bucket key")
+        opening = str(data.get("opening_message") or "").strip()
+        if not opening:
+            raise ValueError("empty opening message")
+        quick_replies = data.get("quick_replies") or []
+        if not isinstance(quick_replies, list):
+            quick_replies = []
+        return {
+            "opening_message": opening,
+            "target_bucket_key": bucket_key,
+            "quick_replies": quick_replies,
+            "rationale": str(data.get("rationale") or ""),
+        }
+    except (LLMUnavailable, Exception):
+        return _foundational_question_fallback()
+
+
+def _foundational_question_fallback() -> dict[str, Any]:
+    page_state = get_curious_page_state()
+    if page_state.pending_questions:
+        question = page_state.pending_questions[0].question
+        return {
+            "opening_message": question.question_text,
+            "target_bucket_key": question.target_bucket_key,
+            "quick_replies": [
+                {"id": option.id, "label": option.label}
+                for option in question.options
+            ],
+            "rationale": "foundational fallback",
+        }
+    return {
+        "opening_message": "How are things going today?",
+        "target_bucket_key": "who_am_i",
+        "quick_replies": [],
+        "rationale": "generic check-in",
+    }
 
 
 def _derive_title(text: str) -> str:
