@@ -70,6 +70,26 @@ def test_persona_prompt_unknown_preset_falls_back_to_warm() -> None:
     assert "warm" in prompt.lower() or "encourag" in prompt.lower()
 
 
+def test_ending_closes_session_and_opens_fresh_one(tmp_path) -> None:
+    from app.lifecycle import get_life_item
+    from app.modules.companion import (
+        end_companion_session,
+        get_or_create_companion_session,
+        record_user_turn,
+    )
+
+    _ready_companion(tmp_path)
+    first = get_or_create_companion_session()
+    record_user_turn(first["id"], "My EAD card was approved today")
+
+    end_companion_session()
+
+    second = get_or_create_companion_session()
+    assert second["id"] != first["id"]
+    assert second["payload"]["session_state"] == "open"
+    assert get_life_item(first["id"])["payload"]["session_state"] == "closed"
+
+
 def test_companion_session_is_stable(tmp_path) -> None:
     from app.modules.companion import get_or_create_companion_session
 

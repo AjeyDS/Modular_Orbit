@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 from psycopg.types.json import Jsonb
@@ -93,6 +93,7 @@ def get_or_create_companion_session() -> dict[str, Any]:
                 WHERE m.id = 'curious'
                     AND li.item_type = 'curious_session'
                     AND li.payload ->> 'session_type' = 'companion'
+                    AND li.payload ->> 'session_state' = 'open'
                 ORDER BY li.created_at ASC
                 LIMIT 1
                 """
@@ -108,10 +109,11 @@ def get_or_create_companion_session() -> dict[str, Any]:
         description="Ongoing Curious companion conversation session.",
         payload={
             "session_type": "companion",
+            "session_state": "open",
             "started_at": datetime.now(timezone.utc).isoformat(),
         },
         source={"kind": "companion_session"},
-        request_id="companion-session",
+        request_id=f"companion-session-{uuid4().hex}",
     )
     _mark_session_lifecycle_not_needed(result.item["id"])
     return result.item
@@ -690,8 +692,21 @@ def send_companion_message(text: str) -> CompanionMessageResponse:
 
 def end_companion_session() -> CuriousWeaveResult:
     session = get_or_create_companion_session()
-    synthesize_companion_session(session["id"])
-    return weave_pending_curious_updates()
+    session_id = session["id"]
+    synthesize_companion_session(session_id)
+    result = weave_pending_curious_updates()
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE life_items
+                SET payload = jsonb_set(payload, '{session_state}', '"closed"'),
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (session_id,),
+            )
+    return result
 
 
 def _pending_checkin_message(session_id: UUID | str) -> CompanionMessage | None:
