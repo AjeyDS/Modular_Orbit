@@ -34,6 +34,7 @@ const prompts = [
 const USER_NAME = 'Ajey'
 
 const STAGE_LABELS: Record<string, string> = {
+  thinking: 'Thinking it through…',
   routing: 'Reading your story',
   checking_state: 'Checking your tasks, plans & goals',
   retrieving: 'Searching your knowledge',
