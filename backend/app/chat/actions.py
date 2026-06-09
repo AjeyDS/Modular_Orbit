@@ -541,7 +541,7 @@ def _fallback_context_answer(mode: ChatMode, context: str, has_suggestion: bool)
         return f"LLM generation is unavailable, but Orbit did retrieve context for this turn.{suffix}"
 
     return (
-        "LLM generation is unavailable, but Standard/Deep Chat did retrieve Orbit context.\n\n"
+        "LLM generation is unavailable, but Orbit did retrieve context for this turn.\n\n"
         + "\n\n".join(excerpts)
         + suffix
     )
