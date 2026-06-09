@@ -209,6 +209,13 @@ def test_chat_response_includes_sources(tmp_path) -> None:
     assert isinstance(resp.sources, list)
 
 
+def test_system_prompt_mentions_clean_formatting() -> None:
+    from app.chat.actions import _chat_system_prompt
+
+    prompt = _chat_system_prompt("understanding").lower()
+    assert "bullet" in prompt or "format" in prompt
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))

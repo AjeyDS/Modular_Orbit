@@ -699,10 +699,15 @@ def _generate_chat_answer(
 
 
 def _chat_system_prompt(mode: ChatMode) -> str:
+    formatting = (
+        "Format cleanly: short paragraphs; use bullet lists only when they genuinely help; "
+        "avoid heavy bolding and stacked headings; at most one bullet level."
+    )
     base = (
         "You are Orbit, a personal AI advisor for one person. Be concise, grounded, "
         "and useful. Use the provided Story Buckets, Goals, module data, Connections, "
-        "and Knowledge Chunks only as context; do not invent private facts."
+        "and Knowledge Chunks only as context; do not invent private facts. "
+        f"{formatting}"
     )
     if mode == "fast":
         return f"{base} This is Fast Chat: answer directly from retrieved knowledge; minimal assumptions."
