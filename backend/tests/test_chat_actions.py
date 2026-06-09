@@ -26,6 +26,20 @@ def _session_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
 
 
+def test_router_fallback_selects_buckets_and_breadth(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.chat.actions import _route_and_classify
+    narrow = _route_and_classify("when is my dentist appointment on friday")
+    broad = _route_and_classify("what are the main things I should focus on in my life right now")
+    assert narrow.breadth == "narrow"
+    assert broad.breadth == "broad"
+    assert all(key in {
+        "who_am_i","goals","interests_and_works","career","health","relationships","habits","aspirations"
+    } for key in broad.buckets)
+    assert 1 <= len(broad.buckets) <= 3
+    assert narrow.expansion_terms == []
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))

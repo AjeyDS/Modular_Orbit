@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import UUID
 
@@ -21,6 +22,24 @@ from app.user_model import list_goals
 
 ChatMode = Literal["fast", "understanding"]
 ConfidenceBucket = Literal["low", "medium", "high"]
+
+KNOWN_BUCKET_KEYS = {
+    "who_am_i", "goals", "interests_and_works", "career",
+    "health", "relationships", "habits", "aspirations",
+}
+_BROAD_MARKERS = (
+    "what should i", "what are the things", "what do i", "focus on",
+    "my life", "everything", "overall", "in general", "priorities",
+    "where should i", "how am i doing",
+)
+
+
+@dataclass
+class RouteDecision:
+    breadth: str  # "narrow" | "broad"
+    buckets: list[str] = field(default_factory=list)
+    expansion_terms: list[str] = field(default_factory=list)
+    rationale: str = ""
 
 CONFIDENCE_SCORES: dict[ConfidenceBucket, float] = {
     "low": 0.3,
@@ -716,6 +735,79 @@ def _slugify(value: str) -> str:
     if not normalized or not normalized[0].isalpha():
         return ""
     return normalized
+
+
+def _bucket_catalog() -> list[dict[str, str]]:
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT stable_key, display_name, description FROM story_buckets WHERE status='active'"
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+def _route_and_classify(message: str) -> RouteDecision:
+    catalog = _bucket_catalog()
+    try:
+        data = generate_json(
+            _route_prompt(message, catalog),
+            system=(
+                "You route a personal-assistant query to the user's story buckets. "
+                "Return only JSON. breadth is 'narrow' for specific questions and "
+                "'broad' for wide/vague life questions. Pick 1-3 bucket keys. "
+                "expansion_terms is non-empty ONLY when breadth is broad."
+            ),
+            temperature=0.1,
+            max_output_tokens=400,
+        )
+        breadth = data.get("breadth")
+        if breadth not in {"narrow", "broad"}:
+            raise ValueError("bad breadth")
+        buckets = [k for k in (data.get("buckets") or []) if k in KNOWN_BUCKET_KEYS][:3]
+        terms = [str(t).strip() for t in (data.get("expansion_terms") or []) if str(t).strip()]
+        if breadth == "narrow":
+            terms = []
+        if not buckets:
+            buckets = _select_buckets_fallback(message, catalog)
+        return RouteDecision(breadth=breadth, buckets=buckets, expansion_terms=terms,
+                             rationale=str(data.get("rationale") or ""))
+    except (LLMUnavailable, Exception):
+        breadth = _breadth_fallback(message)
+        return RouteDecision(
+            breadth=breadth,
+            buckets=_select_buckets_fallback(message, catalog),
+            expansion_terms=[],
+            rationale="lexical fallback",
+        )
+
+
+def _breadth_fallback(message: str) -> str:
+    lowered = message.lower()
+    if any(marker in lowered for marker in _BROAD_MARKERS):
+        return "broad"
+    return "broad" if len(_tokens(message)) <= 2 else "narrow"
+
+
+def _select_buckets_fallback(message: str, catalog: list[dict[str, str]] | None = None) -> list[str]:
+    catalog = catalog if catalog is not None else _bucket_catalog()
+    tokens = set(_tokens(message))
+    scored = sorted(
+        catalog,
+        key=lambda b: _overlap(tokens, f"{b['display_name']} {b['description']}"),
+        reverse=True,
+    )
+    picked = [b["stable_key"] for b in scored if _overlap(tokens, f"{b['display_name']} {b['description']}") > 0][:3]
+    return picked or [scored[0]["stable_key"]] if scored else []
+
+
+def _route_prompt(message: str, catalog: list[dict[str, str]]) -> str:
+    lines = "\n".join(f"- {b['stable_key']}: {b['display_name']} — {b['description']}" for b in catalog)
+    return (
+        "Buckets:\n" + lines + "\n\n"
+        'Return JSON: {"breadth":"narrow|broad","buckets":["key"],'
+        '"expansion_terms":["..."],"rationale":"one line"}\n\n'
+        f"Query:\n{message}"
+    )
 
 
 def _tokens(text: str) -> list[str]:
