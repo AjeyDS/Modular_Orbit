@@ -11,7 +11,7 @@ from psycopg.types.json import Jsonb
 from app.db import transaction
 from app.lifecycle import create_life_item
 from app.chat.actions import KNOWN_BUCKET_KEYS
-from app.llm import LLMUnavailable, generate_json
+from app.llm import LLMUnavailable, generate_json, generate_text
 from app.modules.curious import _mark_session_lifecycle_not_needed, get_curious_page_state
 from app.user_model import list_goals
 
@@ -271,6 +271,105 @@ def generate_companion_question() -> dict[str, Any]:
         }
     except (LLMUnavailable, Exception):
         return _foundational_question_fallback()
+
+
+def respond_to_user_turn(text: str) -> dict[str, Any]:
+    session = get_or_create_companion_session()
+    outstanding = _has_outstanding_question(session["id"])
+    record_user_turn(session["id"], text)
+
+    if is_meaningful_reply(text):
+        return _companion_acknowledge(session["id"], text)
+    if outstanding:
+        return _companion_acknowledge(session["id"], text)
+    return _companion_ask(session["id"])
+
+
+def _has_outstanding_question(session_id: UUID | str) -> bool:
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, meta, created_at
+                FROM companion_messages
+                WHERE session_id = %s AND role = 'assistant'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            )
+            last_assistant = cur.fetchone()
+            if last_assistant is None:
+                return False
+            kind = (last_assistant.get("meta") or {}).get("kind")
+            if kind not in {"question", "checkin"}:
+                return False
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM companion_messages
+                WHERE session_id = %s
+                    AND role = 'user'
+                    AND created_at > %s
+                """,
+                (session_id, last_assistant["created_at"]),
+            )
+            return cur.fetchone()["c"] == 0
+
+
+def _companion_acknowledge(session_id: UUID | str, text: str) -> dict[str, Any]:
+    settings = _companion_settings()
+    persona = build_persona_prompt(
+        preset=str(settings.get("companion_persona_preset", "warm")),
+        override=str(settings.get("companion_persona_override", "")),
+    )
+    try:
+        message = generate_text(
+            f"The person just said:\n{text}\n\nReply with one brief warm acknowledgment.",
+            system=persona,
+            temperature=0.4,
+            max_output_tokens=120,
+        )
+    except (LLMUnavailable, Exception):
+        message = "Got it — thanks for sharing that."
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO companion_messages (session_id, role, content, meta)
+                VALUES (%s, 'assistant', %s, %s)
+                """,
+                (session_id, message, Jsonb({"kind": "acknowledge"})),
+            )
+    return {"kind": "acknowledge", "message": message}
+
+
+def _companion_ask(session_id: UUID | str) -> dict[str, Any]:
+    question = generate_companion_question()
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO companion_messages (session_id, role, content, meta)
+                VALUES (%s, 'assistant', %s, %s)
+                """,
+                (
+                    session_id,
+                    question["opening_message"],
+                    Jsonb({
+                        "kind": "question",
+                        "target_bucket_key": question["target_bucket_key"],
+                        "quick_replies": question.get("quick_replies") or [],
+                    }),
+                ),
+            )
+    return {
+        "kind": "question",
+        "message": question["opening_message"],
+        "quick_replies": question.get("quick_replies") or [],
+        "target_bucket_key": question["target_bucket_key"],
+    }
 
 
 def _foundational_question_fallback() -> dict[str, Any]:
