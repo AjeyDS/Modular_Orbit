@@ -26,6 +26,15 @@ def _session_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
 
 
+def test_fast_mode_attaches_no_buckets(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.chat.actions import _build_answer_context
+    fast_ctx = _build_answer_context("fast", "what are my career goals")
+    understanding_ctx = _build_answer_context("understanding", "what should I focus on in my career")
+    assert "Story Buckets:" not in fast_ctx
+    assert "Story Buckets:" in understanding_ctx
+
+
 def test_understanding_retrieval_caps_followups(tmp_path, monkeypatch) -> None:
     _ready(tmp_path)
     import app.chat.actions as actions
@@ -200,8 +209,8 @@ def test_context_chat_prioritizes_rag_chunks_over_recent_module_data(tmp_path) -
     context = _build_answer_context("understanding", "What does my resume say about RAG?")
 
     assert "Knowledge Chunks:" in context
-    assert "Selected module data:" in context
-    assert context.index("Knowledge Chunks:") < context.index("Selected module data:")
+    assert "Story Buckets:" in context
+    assert context.index("Knowledge Chunks:") < context.index("Story Buckets:")
     assert "- From Resume.pdf" in context
 
     remove_document(document.id)

@@ -36,14 +36,14 @@ def test_respond_to_chat_persists_messages_and_sets_title(tmp_path) -> None:
     respond_to_chat(
         ChatRequest(
             session_id=session_id,
-            mode="context",
+            mode="understanding",
             message="Help me think through whether to switch teams",
         )
     )
     respond_to_chat(
         ChatRequest(
             session_id=session_id,
-            mode="context",
+            mode="understanding",
             message="What other factors should I weigh?",
         )
     )
@@ -51,7 +51,7 @@ def test_respond_to_chat_persists_messages_and_sets_title(tmp_path) -> None:
     messages = list_chat_messages(session_id)
     assert [m.role for m in messages] == ["user", "assistant", "user", "assistant"]
     assert messages[0].content == "Help me think through whether to switch teams"
-    assert messages[0].mode == "context"
+    assert messages[0].mode == "understanding"
     assert messages[1].mode is None  # assistant rows leave mode null
 
     sessions = list_chat_sessions()

@@ -558,42 +558,43 @@ def _context_excerpts(context: str, *, limit: int = 4) -> list[str]:
 
 
 def _build_answer_context(mode: ChatMode, message: str) -> str:
+    if mode == "fast":
+        sections = [_chunk_context(message, limit=4), _connection_context(message), _goal_context()]
+        return "\n\n".join(s for s in sections if s.strip()) or "No Orbit context found yet."
+
+    decision = _route_and_classify(message)
+    chunks = _understanding_retrieval(message, decision, limit=8 if decision.breadth == "broad" else 4)
+    chunk_block = _chunks_to_context(chunks)
     sections = [
-        _chunk_context(message, limit=8 if mode == "understanding" else 4),
+        chunk_block,
         _connection_context(message),
-        _story_bucket_context(),
+        _selected_bucket_context(decision.buckets),
         _goal_context(),
-        _module_tool_context(message),
     ]
-    return "\n\n".join(section for section in sections if section.strip()) or "No Orbit context found yet."
+    return "\n\n".join(s for s in sections if s.strip()) or "No Orbit context found yet."
 
 
-def _story_bucket_context() -> str:
+def _selected_bucket_context(keys: list[str]) -> str:
+    if not keys:
+        return ""
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT display_name, description, content
                 FROM story_buckets
-                WHERE status = 'active'
-                ORDER BY
-                    CASE stable_key
-                        WHEN 'who_am_i' THEN 1
-                        WHEN 'goals' THEN 2
-                        WHEN 'interests_and_works' THEN 3
-                        ELSE 10
-                    END,
-                    display_name
-                LIMIT 8
-                """
+                WHERE status='active' AND stable_key = ANY(%s)
+                """,
+                (keys,),
             )
             rows = cur.fetchall()
-
-    lines = []
-    for row in rows:
-        text = (row.get("content") or "")[:1200].strip()
-        lines.append(f"- {row['display_name']}: {row['description']}\n{text}")
-    return "Story Buckets:\n" + "\n".join(lines) if lines else ""
+    if not rows:
+        return ""
+    lines = [
+        f"- {r['display_name']}: {r['description']}\n{(r.get('content') or '')[:1400].strip()}"
+        for r in rows
+    ]
+    return "Story Buckets:\n" + "\n".join(lines)
 
 
 def _goal_context() -> str:
@@ -604,49 +605,6 @@ def _goal_context() -> str:
         f"- {goal.status}: {goal.title} ({goal.goal_id})\n{goal.body[:500]}"
         for goal in goals[:10]
     )
-
-
-def _module_tool_context(message: str) -> str:
-    tokens = set(_tokens(message))
-    document_query = bool(tokens & {"resume", "cv", "document", "documents", "file", "upload", "uploaded"})
-    with transaction() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT m.id AS module_id, li.title, li.description, li.lifecycle_status, li.payload, li.updated_at
-                FROM life_items li
-                JOIN module_instances mi ON mi.id = li.module_instance_id
-                JOIN modules m ON m.id = mi.module_id
-                WHERE li.lifecycle_status <> 'deleted'
-                ORDER BY li.updated_at DESC
-                LIMIT 24
-                """
-            )
-            rows = cur.fetchall()
-
-    if not rows:
-        return ""
-    scored = []
-    for row in rows:
-        text = f"{row['module_id']} {row['title']} {row['description']} {row['payload']}"
-        score = _overlap(tokens, text)
-        if document_query and row["module_id"] == "documents":
-            score += 20
-        scored.append((score, row))
-
-    ranked = [
-        row
-        for score, row in sorted(scored, key=lambda item: (item[0], item[1]["updated_at"]), reverse=True)
-        if score > 0
-    ]
-    if not ranked:
-        ranked = [row for _, row in sorted(scored, key=lambda item: item[1]["updated_at"], reverse=True)[:8]]
-
-    lines = [
-        f"- [{row['module_id']}/{row['lifecycle_status']}] {row['title']}: {row['description']} {row['payload']}"
-        for row in ranked[:8]
-    ]
-    return "Selected module data:\n" + "\n".join(lines)
 
 
 def _connection_context(message: str) -> str:
@@ -679,6 +637,10 @@ def _connection_context(message: str) -> str:
 
 def _chunk_context(message: str, *, limit: int) -> str:
     chunks = retrieve_chunks(message, limit=limit)
+    return _chunks_to_context(chunks)
+
+
+def _chunks_to_context(chunks: list) -> str:
     if not chunks:
         return ""
     return "Knowledge Chunks:\n" + "\n".join(
