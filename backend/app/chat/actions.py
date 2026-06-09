@@ -753,7 +753,13 @@ def _chat_system_prompt(mode: ChatMode) -> str:
         "to RANK concrete items (tasks, plans, routines) by urgency (soonest or overdue "
         "due dates first), then priority, then alignment to active goals. Recommend an "
         "ordered short list (top 3), each with a one-line reason, leading with the single "
-        "most important. Decide; don't just describe."
+        "most important. Decide; don't just describe. "
+        "When the person asks what to learn, improve, or do next, don't just recombine "
+        "what they already have. Compare their current skills, projects, and routines "
+        "against what their goals typically require, and surface 1–3 concrete things "
+        "they have NOT already listed (a real gap), each with a one-line why. Suggest "
+        "skill areas, topics, and types of resources — do not fabricate specific course "
+        "names, products, or links."
     )
 
 

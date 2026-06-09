@@ -281,6 +281,14 @@ def test_prompt_allows_advice_but_guards_personal_facts() -> None:
     assert "general" in prompt and ("suggest" in prompt or "gap" in prompt)
 
 
+def test_understanding_prompt_has_gap_instruction() -> None:
+    from app.chat.actions import _chat_system_prompt
+
+    prompt = _chat_system_prompt("understanding").lower()
+    assert "have not" in prompt or "haven't" in prompt or "not already listed" in prompt
+    assert "fabricate" in prompt or "do not invent specific" in prompt
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))
