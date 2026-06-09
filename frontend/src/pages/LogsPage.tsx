@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { ListChecks, RefreshCw } from 'lucide-react'
-import { createLog, fetchLogs, type LogItem } from '../lib/api'
+import { Archive, ListChecks, RefreshCw, Trash2 } from 'lucide-react'
+import { archiveLog, createLog, deleteLog, fetchLogs, type LogItem } from '../lib/api'
 import { AsyncStatusPills } from '../components/status'
 import { pageContentClass } from '../layout/pageShell'
 
@@ -153,7 +153,19 @@ export default function LogsPage() {
                     </p>
                     <div className="divide-y divide-gray-100 dark:divide-gray-800">
                       {group.items.map((log) => (
-                        <LogRow key={log.id} log={log} />
+                        <LogRow
+                          key={log.id}
+                          log={log}
+                          onArchive={async () => {
+                            await archiveLog(log.id)
+                            await loadLogs()
+                          }}
+                          onDelete={async () => {
+                            if (!confirm('Delete this log entry?')) return
+                            await deleteLog(log.id)
+                            setLogs((current) => current.filter((item) => item.id !== log.id))
+                          }}
+                        />
                       ))}
                     </div>
                   </section>
@@ -238,7 +250,15 @@ function EmptyLogsState() {
   )
 }
 
-function LogRow({ log }: { log: LogItem }) {
+function LogRow({
+  log,
+  onArchive,
+  onDelete,
+}: {
+  log: LogItem
+  onArchive: () => void | Promise<void>
+  onDelete: () => void | Promise<void>
+}) {
   const hasPendingWork =
     log.connection_status !== 'complete' ||
     (log.chunk_status !== 'complete' && log.chunk_status !== 'not_needed') ||
@@ -257,6 +277,24 @@ function LogRow({ log }: { log: LogItem }) {
           )}
           <AsyncStatusPills connection={log.connection_status} chunk={log.chunk_status} bucketUpdate={log.bucket_update_status} />
         </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <button
+          type="button"
+          onClick={() => void onArchive()}
+          title="Archive log"
+          className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+        >
+          <Archive size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => void onDelete()}
+          title="Delete log"
+          className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-red-500 dark:hover:bg-gray-800"
+        >
+          <Trash2 size={14} />
+        </button>
       </div>
     </article>
   )
