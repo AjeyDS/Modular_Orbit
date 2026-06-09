@@ -45,6 +45,26 @@ _FOCUS_MARKERS = (
     "whats important",
 )
 _ACTIONABLE_MODULES = frozenset({"tasks", "plans", "routines", "goals"})
+_QUESTION_TYPES = frozenset({"lookup", "gap_analysis", "prioritize", "how_to", "reflection", "open"})
+_FOCUS_APPROACH = (
+    "If the user asks what to focus on or how to prioritize, use the Structured data "
+    "to RANK concrete items (tasks, plans, routines) by urgency (soonest or overdue "
+    "due dates first), then priority, then alignment to active goals. Recommend an "
+    "ordered short list (top 3), each with a one-line reason, leading with the single "
+    "most important. Decide; don't just describe."
+)
+_GAP_APPROACH = (
+    "When the person asks what to learn, improve, or do next, don't just recombine "
+    "what they already have. Compare their current skills, projects, and routines "
+    "against what their goals typically require, and surface 1–3 concrete things "
+    "they have NOT already listed (a real gap), each with a one-line why. Suggest "
+    "skill areas, topics, and types of resources — do not fabricate specific course "
+    "names, products, or links."
+)
+_DEFAULT_APPROACH = (
+    "Answer the user's actual question directly using the retrieved context. "
+    "Be concise and grounded."
+)
 _ADVICE_MARKERS = (
     "what can i learn",
     "what should i learn",
@@ -69,6 +89,13 @@ class RouteDecision:
     expansion_terms: list[str] = field(default_factory=list)
     modules: list[str] = field(default_factory=list)
     rationale: str = ""
+
+
+@dataclass
+class ThinkingPlan:
+    question_type: str = "open"
+    approach: str = ""
+    retrieval_hint: str = ""
 
 CONFIDENCE_SCORES: dict[ConfidenceBucket, float] = {
     "low": 0.3,
@@ -1059,6 +1086,58 @@ def _bucket_catalog() -> list[dict[str, str]]:
                 "SELECT stable_key, display_name, description FROM story_buckets WHERE status='active'"
             )
             return [dict(row) for row in cur.fetchall()]
+
+
+def _user_model_index() -> str:
+    catalog = _bucket_catalog()
+    bucket_lines = [f"- {row['display_name']}: {row['description']}" for row in catalog]
+    goals = list_goals()
+    goal_lines = [f"- {goal.status}/{goal.horizon}: {goal.title}" for goal in goals[:10]]
+    modules = ", ".join(sorted(QUERYABLE_MODULES))
+    sections = [
+        "Story buckets:\n" + "\n".join(bucket_lines) if bucket_lines else "",
+        "Goals:\n" + "\n".join(goal_lines) if goal_lines else "",
+        f"Queryable modules: {modules}",
+        "Recent activity: logs, tasks, plans, documents, and routines appear in structured data when retrieved.",
+    ]
+    return "\n\n".join(section for section in sections if section.strip())
+
+
+def _think(message: str) -> ThinkingPlan:
+    try:
+        data = generate_json(
+            f"Question:\n{message}\n\nUser model index:\n{_user_model_index()}\n\n"
+            'Return JSON: {"question_type":"lookup|gap_analysis|prioritize|how_to|reflection|open",'
+            '"approach":"how to tackle THIS question and what a great answer looks like",'
+            '"retrieval_hint":"which life areas/modules/data to pull and why"}',
+            system=(
+                "You plan how to answer a personal-assistant question. Think about the person's "
+                "context and what a great answer needs. Return only JSON."
+            ),
+            temperature=0.2,
+            max_output_tokens=350,
+        )
+        question_type = data.get("question_type")
+        if question_type not in _QUESTION_TYPES:
+            question_type = "open"
+        approach = str(data.get("approach") or "").strip()
+        if not approach:
+            raise ValueError("empty approach")
+        return ThinkingPlan(
+            question_type=str(question_type),
+            approach=approach,
+            retrieval_hint=str(data.get("retrieval_hint") or "").strip(),
+        )
+    except (LLMUnavailable, Exception):
+        return _think_fallback(message)
+
+
+def _think_fallback(message: str) -> ThinkingPlan:
+    if _is_focus_query(message):
+        return ThinkingPlan("prioritize", _FOCUS_APPROACH, "tasks, plans, routines, goals")
+    if _is_advice_query(message):
+        return ThinkingPlan("gap_analysis", _GAP_APPROACH, "tasks, plans, routines, goals, career")
+    return ThinkingPlan("open", _DEFAULT_APPROACH, "")
 
 
 def _route_and_classify(message: str) -> RouteDecision:

@@ -135,6 +135,35 @@ def test_is_advice_query() -> None:
     assert _is_advice_query("when is my dentist appointment?") is False
 
 
+def test_think_fallback_classifies_focus_and_advice() -> None:
+    from app.chat.actions import ThinkingPlan, _think
+
+    plan1 = _think("what should I focus on today?")
+    assert isinstance(plan1, ThinkingPlan)
+    assert plan1.question_type in {"prioritize", "open"}
+    assert plan1.approach
+    plan2 = _think("what can I learn next to fuel my career?")
+    assert plan2.question_type in {"gap_analysis", "open"}
+
+
+def test_think_llm_path(monkeypatch) -> None:
+    import app.chat.actions as actions
+
+    monkeypatch.setattr(
+        actions,
+        "generate_json",
+        lambda *args, **kwargs: {
+            "question_type": "lookup",
+            "approach": "Give the exact value plainly.",
+            "retrieval_hint": "tasks and documents",
+        },
+    )
+    plan = actions._think("when is my dentist appointment?")
+    assert plan.question_type == "lookup"
+    assert "exact value" in plan.approach
+    assert "tasks" in plan.retrieval_hint
+
+
 def test_advice_query_forces_actionable_modules() -> None:
     from app.chat.actions import _route_and_classify
 
