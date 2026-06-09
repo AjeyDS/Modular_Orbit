@@ -639,3 +639,31 @@ def test_recent_history_empty_for_new_session() -> None:
     from app.chat.actions import _recent_history
 
     assert _recent_history("does-not-exist") == []
+
+
+def test_think_fallback_resolved_question_is_message() -> None:
+    from app.chat.actions import _think
+
+    p = _think("prioritize this")  # LLM disabled -> fallback
+    assert p.resolved_question == "prioritize this"
+
+
+def test_think_resolves_with_history(monkeypatch) -> None:
+    import app.chat.actions as actions
+
+    captured = {}
+
+    def fake(prompt, *, system, **k):
+        captured["prompt"] = prompt
+        return {
+            "question_type": "prioritize",
+            "approach": "rank them",
+            "retrieval_hint": "",
+            "resolved_question": "prioritize the learning areas: MLOps, Kubernetes",
+        }
+
+    monkeypatch.setattr(actions, "generate_json", fake)
+    hist = [("user", "what can I learn?"), ("assistant", "MLOps, Kubernetes, IaC")]
+    p = actions._think("prioritize this", hist)
+    assert "MLOps" in p.resolved_question
+    assert "what can I learn" in captured["prompt"] or "MLOps" in captured["prompt"]

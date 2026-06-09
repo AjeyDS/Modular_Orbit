@@ -96,6 +96,7 @@ class ThinkingPlan:
     question_type: str = "open"
     approach: str = ""
     retrieval_hint: str = ""
+    resolved_question: str = ""
 
 CONFIDENCE_SCORES: dict[ConfidenceBucket, float] = {
     "low": 0.3,
@@ -1124,19 +1125,29 @@ def _recent_history(session_id: str, *, limit: int = 6, char_cap: int = 500) -> 
     return out
 
 
-def _think(message: str) -> ThinkingPlan:
+def _think(message: str, history: list[tuple[str, str]] | None = None) -> ThinkingPlan:
+    history_block = ""
+    if history:
+        rendered = "\n".join(f"{role}: {content}" for role, content in history)
+        history_block = (
+            "Recent conversation (oldest first):\n" + rendered + "\n\n"
+            "The latest question may rely on this conversation. Resolve pronouns and "
+            'references (e.g. "that", "those", "the second one") against it.\n\n'
+        )
     try:
         data = generate_json(
-            f"Question:\n{message}\n\nUser model index:\n{_user_model_index()}\n\n"
+            f"{history_block}Latest question:\n{message}\n\nUser model index:\n{_user_model_index()}\n\n"
             'Return JSON: {"question_type":"lookup|gap_analysis|prioritize|how_to|reflection|open",'
             '"approach":"how to tackle THIS question and what a great answer looks like",'
-            '"retrieval_hint":"which life areas/modules/data to pull and why"}',
+            '"retrieval_hint":"which life areas/modules/data to pull and why",'
+            '"resolved_question":"a self-contained restatement of the latest question with all '
+            'references resolved using the conversation; identical to the question if already self-contained"}',
             system=(
                 "You plan how to answer a personal-assistant question. Think about the person's "
                 "context and what a great answer needs. Return only JSON."
             ),
             temperature=0.2,
-            max_output_tokens=350,
+            max_output_tokens=400,
         )
         question_type = data.get("question_type")
         if question_type not in _QUESTION_TYPES:
@@ -1144,10 +1155,12 @@ def _think(message: str) -> ThinkingPlan:
         approach = str(data.get("approach") or "").strip()
         if not approach:
             raise ValueError("empty approach")
+        resolved = str(data.get("resolved_question") or "").strip() or message
         return ThinkingPlan(
             question_type=str(question_type),
             approach=approach,
             retrieval_hint=str(data.get("retrieval_hint") or "").strip(),
+            resolved_question=resolved,
         )
     except (LLMUnavailable, Exception):
         return _think_fallback(message)
@@ -1155,10 +1168,10 @@ def _think(message: str) -> ThinkingPlan:
 
 def _think_fallback(message: str) -> ThinkingPlan:
     if _is_focus_query(message):
-        return ThinkingPlan("prioritize", _FOCUS_APPROACH, "tasks, plans, routines, goals")
+        return ThinkingPlan("prioritize", _FOCUS_APPROACH, "tasks, plans, routines, goals", resolved_question=message)
     if _is_advice_query(message):
-        return ThinkingPlan("gap_analysis", _GAP_APPROACH, "tasks, plans, routines, goals, career")
-    return ThinkingPlan("open", _DEFAULT_APPROACH, "")
+        return ThinkingPlan("gap_analysis", _GAP_APPROACH, "tasks, plans, routines, goals, career", resolved_question=message)
+    return ThinkingPlan("open", _DEFAULT_APPROACH, "", resolved_question=message)
 
 
 def _route_and_classify(message: str, plan: ThinkingPlan | None = None) -> RouteDecision:
