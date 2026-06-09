@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
-import { Check, ChevronDown, Settings, Sparkles } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { ArrowUp, ChevronDown, Settings, Sparkles } from 'lucide-react'
 import {
-  answerCuriousPendingQuestion,
+  endCompanionSession,
+  fetchCompanionState,
   fetchShellState,
-  fetchCuriousState,
-  sendCuriousWeaveBeacon,
+  sendCompanionEndBeacon,
+  sendCompanionMessage,
   updateModuleInstanceSettings,
-  weavePendingCuriousUpdates,
-  type CuriousAnsweredGroup,
-  type CuriousPageState,
-  type CuriousPendingQuestion,
+  type CompanionMessageItem,
+  type CompanionState,
+  type CompanionTimelineEntry,
   type ModuleInstanceItem,
 } from '../lib/api'
 import { pageContentClass } from '../layout/pageShell'
@@ -18,27 +18,31 @@ import { pageContentClass } from '../layout/pageShell'
 const CURIOUS_IDLE_WEAVE_MS = 2 * 60 * 1000
 const easeOut = [0.23, 1, 0.32, 1] as const
 
+type QuickReply = { id?: string; label: string }
+
 export default function CuriousPage() {
-  const [state, setState] = useState<CuriousPageState | null>(null)
-  const [skippedIds, setSkippedIds] = useState<Set<string>>(() => new Set())
-  const [selectedOption, setSelectedOption] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [companion, setCompanion] = useState<CompanionState | null>(null)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [optimisticMessages, setOptimisticMessages] = useState<CompanionMessageItem[]>([])
   const [weaving, setWeaving] = useState(false)
   const [hasPendingWeave, setHasPendingWeave] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [learnedOpen, setLearnedOpen] = useState(false)
+  const [timelineOpen, setTimelineOpen] = useState(false)
   const [curiousInstance, setCuriousInstance] = useState<ModuleInstanceItem | null>(null)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const pendingWeaveRef = useRef(false)
   const idleTimerRef = useRef<number | null>(null)
   const flushingRef = useRef(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   async function load() {
     setError('')
     try {
-      const [next, shell] = await Promise.all([fetchCuriousState(), fetchShellState()])
-      setState(next)
+      const [next, shell] = await Promise.all([fetchCompanionState(), fetchShellState()])
+      setCompanion(next)
+      setOptimisticMessages([])
       setCuriousInstance(shell.enabled_modules.find((module) => module.module_id === 'curious') ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load Curious')
@@ -48,16 +52,6 @@ export default function CuriousPage() {
   useEffect(() => {
     void load()
   }, [])
-
-  // Drop skipped IDs that are no longer in the pending list (after a save brings new state).
-  useEffect(() => {
-    if (!state) return
-    setSkippedIds((prev) => {
-      const liveIds = new Set(state.pending_questions.map((p) => p.question.id))
-      const next = new Set([...prev].filter((id) => liveIds.has(id)))
-      return next.size === prev.size ? prev : next
-    })
-  }, [state])
 
   const clearIdleWeave = useCallback(() => {
     if (idleTimerRef.current !== null) {
@@ -79,7 +73,7 @@ export default function CuriousPage() {
         setError('')
       }
       try {
-        const result = await weavePendingCuriousUpdates()
+        const result = await endCompanionSession()
         const mergedCount = result.results.reduce((total, item) => total + item.merged_count, 0)
         if (reason === 'done') {
           setStatus(
@@ -88,6 +82,7 @@ export default function CuriousPage() {
               : 'Buckets are already up to date.',
           )
         }
+        await load()
       } catch (err) {
         pendingWeaveRef.current = true
         setHasPendingWeave(true)
@@ -114,7 +109,7 @@ export default function CuriousPage() {
       if (!pendingWeaveRef.current) return
       pendingWeaveRef.current = false
       setHasPendingWeave(false)
-      sendCuriousWeaveBeacon()
+      sendCompanionEndBeacon()
     }
     window.addEventListener('pagehide', flushOnPageHide)
     return () => {
@@ -123,65 +118,60 @@ export default function CuriousPage() {
       if (pendingWeaveRef.current) {
         pendingWeaveRef.current = false
         setHasPendingWeave(false)
-        sendCuriousWeaveBeacon()
+        sendCompanionEndBeacon()
       }
     }
   }, [clearIdleWeave])
 
-  const focusQueue = useMemo(() => {
-    if (!state) return [] as CuriousPendingQuestion[]
-    const nonSkipped = state.pending_questions.filter((p) => !skippedIds.has(p.question.id))
-    const skipped = state.pending_questions.filter((p) => skippedIds.has(p.question.id))
-    return [...nonSkipped, ...skipped]
-  }, [state, skippedIds])
+  const threadMessages = useMemo(() => {
+    if (!companion) return optimisticMessages
+    const persisted = companion.pending_checkin
+      ? companion.messages.filter((message) => message.id !== companion.pending_checkin?.id)
+      : companion.messages
+    return [...persisted, ...optimisticMessages]
+  }, [companion, optimisticMessages])
 
-  const focus = focusQueue[0] ?? null
-  const remainingAfter = Math.max(focusQueue.length - 1, 0)
-
-  // Reset the selected option whenever the focus question changes.
-  const focusId = focus?.question.id ?? null
-  useEffect(() => {
-    setSelectedOption('')
-  }, [focusId])
-
-  const answeredCount = useMemo(
-    () => (state ? state.answered_groups.reduce((sum, group) => sum + group.answers.length, 0) : 0),
-    [state],
-  )
-
-  async function answerQuestion(pending: CuriousPendingQuestion) {
-    if (!selectedOption || saving) return
-    setSaving(true)
+  async function sendMessage(text: string) {
+    const trimmed = text.trim()
+    if (!trimmed || sending) return
+    setSending(true)
     setError('')
     setStatus('')
-    try {
-      const next = await answerCuriousPendingQuestion({
-        question_life_item_id: pending.life_item_id,
-        session_id: state?.onboarding.session_id ?? null,
-        question_id: pending.question.id,
-        option_id: selectedOption,
-      })
-      setState(next)
-      setSelectedOption('')
-      if (pending.question.tier !== 'onboarding') {
-        pendingWeaveRef.current = true
-        setHasPendingWeave(true)
-        scheduleIdleWeave()
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to save answer')
-    } finally {
-      setSaving(false)
+    const optimisticUser: CompanionMessageItem = {
+      id: `optimistic-user-${Date.now()}`,
+      role: 'user',
+      content: trimmed,
+      meta: {},
+      created_at: new Date().toISOString(),
     }
-  }
-
-  function skipFocus() {
-    if (!focus || focusQueue.length <= 1) return
-    setSkippedIds((prev) => {
-      const next = new Set(prev)
-      next.add(focus.question.id)
-      return next
-    })
+    setOptimisticMessages((prev) => [...prev, optimisticUser])
+    setDraft('')
+    try {
+      const response = await sendCompanionMessage(trimmed)
+      const optimisticAssistant: CompanionMessageItem = {
+        id: `optimistic-assistant-${Date.now()}`,
+        role: 'assistant',
+        content: response.reply.message,
+        meta: {
+          kind: response.reply.kind,
+          quick_replies: response.reply.quick_replies,
+          target_bucket_key: response.reply.target_bucket_key,
+        },
+        created_at: new Date().toISOString(),
+      }
+      setOptimisticMessages((prev) => [...prev, optimisticAssistant])
+      pendingWeaveRef.current = true
+      setHasPendingWeave(true)
+      scheduleIdleWeave()
+      const refreshed = await fetchCompanionState()
+      setCompanion(refreshed)
+      setOptimisticMessages([])
+    } catch (err) {
+      setOptimisticMessages((prev) => prev.filter((message) => message.id !== optimisticUser.id))
+      setError(err instanceof Error ? err.message : 'Unable to send message')
+    } finally {
+      setSending(false)
+    }
   }
 
   async function updateCuriousSettings(partial: Record<string, unknown>) {
@@ -191,12 +181,14 @@ export default function CuriousPage() {
     try {
       const updated = await updateModuleInstanceSettings(curiousInstance.id, nextSettings)
       setCuriousInstance(updated)
+      const refreshed = await fetchCompanionState()
+      setCompanion(refreshed)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update Curious settings')
     }
   }
 
-  if (!state) {
+  if (!companion) {
     return (
       <div className="min-h-[calc(100vh-3rem)] bg-gray-50 dark:bg-[#18181A]">
         <div className={`${pageContentClass} py-8 text-center text-[14px] text-gray-400`}>Loading Curious…</div>
@@ -204,16 +196,16 @@ export default function CuriousPage() {
     )
   }
 
+  const capturedCount = companion.timeline.length
+
   return (
     <div className="min-h-[calc(100vh-3rem)] bg-gray-50 text-gray-800 dark:bg-[#18181A] dark:text-gray-200">
-      <div className={`${pageContentClass} py-7`}>
+      <div className={`${pageContentClass} flex min-h-[calc(100vh-3rem)] flex-col py-7`}>
         <header className="mb-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900 dark:text-gray-100">Curious</h1>
             <p className="text-[12px] text-gray-500 dark:text-gray-500">
-              <span className="tabular-nums">{answeredCount}</span> answered
-              <span className="px-1.5 text-gray-300 dark:text-gray-700">·</span>
-              <span className="tabular-nums">{state.pending_count}</span> pending
+              <span className="tabular-nums">{capturedCount}</span> captured moment{capturedCount === 1 ? '' : 's'}
             </p>
           </div>
           <div className="relative flex items-center gap-2">
@@ -257,187 +249,183 @@ export default function CuriousPage() {
           </div>
         )}
 
-        <div className="space-y-5">
-          <AnimatePresence mode="wait" initial={false}>
-            {focus ? (
-              <FocusQuestion
-                key={focus.question.id}
-                pending={focus}
-                selectedOption={selectedOption}
-                saving={saving}
-                remainingAfter={remainingAfter}
-                onSelect={setSelectedOption}
-                onAnswer={() => void answerQuestion(focus)}
-                onSkip={focusQueue.length > 1 ? skipFocus : null}
-              />
-            ) : (
-              <EmptyState key="empty" />
-            )}
-          </AnimatePresence>
+        <div className="flex min-h-0 flex-1 flex-col gap-5">
+          {companion.pending_checkin && (
+            <PendingCheckinGreeting
+              message={companion.pending_checkin}
+              onQuickReply={(label) => void sendMessage(label)}
+            />
+          )}
 
-          <LearnedAccordion
-            open={learnedOpen}
-            onToggle={() => setLearnedOpen((value) => !value)}
-            selfProfile={state.self_profile}
-            answeredGroups={state.answered_groups}
-            answeredCount={answeredCount}
+          <section
+            className="flex min-h-[20rem] flex-1 flex-col rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
+            style={{ borderWidth: '0.5px' }}
+          >
+            <CompanionThread messages={threadMessages} onQuickReply={(label) => void sendMessage(label)} />
+            <div className="border-t border-gray-100 p-3 dark:border-gray-800">
+              <div
+                className="relative rounded-2xl border border-gray-200 bg-white shadow-sm transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
+                style={{ borderWidth: '0.5px' }}
+              >
+                <textarea
+                  ref={textareaRef}
+                  value={draft}
+                  rows={1}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault()
+                      void sendMessage(draft)
+                    }
+                  }}
+                  placeholder="Share an update or answer…"
+                  className="w-full resize-none overflow-y-auto bg-transparent px-4 pt-3 text-[14px] text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
+                  style={{ maxHeight: '140px' }}
+                />
+                <div className="flex items-center justify-end px-3 pb-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void sendMessage(draft)}
+                    disabled={!draft.trim() || sending}
+                    aria-label="Send"
+                    className={`rounded-lg p-1.5 transition-[color,transform,background-color] duration-150 ease-out ${
+                      draft.trim()
+                        ? 'bg-blue-500 text-white hover:bg-blue-600 active:scale-[0.97]'
+                        : 'cursor-default bg-gray-100 text-gray-300 dark:bg-gray-800 dark:text-gray-600'
+                    }`}
+                  >
+                    <ArrowUp size={16} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <CapturedMomentsTimeline
+            open={timelineOpen}
+            onToggle={() => setTimelineOpen((value) => !value)}
+            timeline={companion.timeline}
           />
-
-          {state.preview.length > 0 && <UserModelPreview preview={state.preview} />}
         </div>
       </div>
     </div>
   )
 }
 
-function FocusQuestion({
-  pending,
-  selectedOption,
-  saving,
-  remainingAfter,
-  onSelect,
-  onAnswer,
-  onSkip,
+function PendingCheckinGreeting({
+  message,
+  onQuickReply,
 }: {
-  pending: CuriousPendingQuestion
-  selectedOption: string
-  saving: boolean
-  remainingAfter: number
-  onSelect: (optionId: string) => void
-  onAnswer: () => void
-  onSkip: (() => void) | null
+  message: CompanionMessageItem
+  onQuickReply: (label: string) => void
 }) {
-  const question = pending.question
-  return (
-    <motion.article
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -8 }}
-      transition={{ duration: 0.2, ease: easeOut }}
-      className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E] sm:p-7"
-      style={{ borderWidth: '0.5px' }}
-    >
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:bg-blue-950/40 dark:text-blue-300">
-          {question.source_label}
-        </span>
-        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-          {question.target_bucket_name}
-        </span>
-        {question.foundational && (
-          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300">
-            Foundational
-          </span>
-        )}
-      </div>
-
-      {question.framing_text && (
-        <p className="mb-2 text-[12px] uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">
-          {question.framing_text}
-        </p>
-      )}
-
-      <h2 className="mb-6 text-[22px] font-medium leading-tight tracking-[-0.01em] text-gray-900 dark:text-gray-100 sm:text-[24px]">
-        {question.question_text}
-      </h2>
-
-      <div className="space-y-2">
-        {question.options.map((option) => {
-          const selected = selectedOption === option.id
-          return (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => onSelect(option.id)}
-              className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left text-[14px] transition-[border-color,background-color,transform] duration-150 ease-out active:scale-[0.99] ${
-                selected
-                  ? 'border-blue-400 bg-blue-50/60 text-gray-900 dark:border-blue-500 dark:bg-blue-950/30 dark:text-gray-100'
-                  : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-300 dark:hover:border-gray-600 dark:hover:bg-[#202024]'
-              }`}
-              style={{ borderWidth: '0.5px' }}
-            >
-              <span
-                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors ${
-                  selected
-                    ? 'border-blue-500 bg-blue-500 text-white'
-                    : 'border-gray-300 dark:border-gray-600'
-                }`}
-              >
-                {selected && <Check size={10} strokeWidth={3} />}
-              </span>
-              <span className="font-medium">{option.label}</span>
-            </button>
-          )
-        })}
-      </div>
-
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[12px] text-gray-400 dark:text-gray-500">
-          {onSkip && (
-            <>
-              <button
-                type="button"
-                onClick={onSkip}
-                className="rounded-md px-2 py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-              >
-                Skip
-              </button>
-              <span className="text-gray-300 dark:text-gray-700">·</span>
-            </>
-          )}
-          <span>
-            {remainingAfter === 0
-              ? 'Last one'
-              : `${remainingAfter} more after this`}
-          </span>
-        </div>
-        <button
-          type="button"
-          disabled={!selectedOption || saving}
-          onClick={onAnswer}
-          className="rounded-xl bg-blue-500 px-4 py-2 text-[13px] font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
-        >
-          {saving ? 'Saving…' : 'Save answer'}
-        </button>
-      </div>
-    </motion.article>
-  )
-}
-
-function EmptyState() {
+  const quickReplies = parseQuickReplies(message.meta)
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -8 }}
       transition={{ duration: 0.2, ease: easeOut }}
-      className="rounded-2xl border border-dashed border-gray-200 bg-white/60 px-6 py-12 text-center dark:border-gray-700 dark:bg-[#1C1C1E]/60"
+      className="rounded-2xl border border-violet-200 bg-violet-50/70 p-5 shadow-sm dark:border-violet-900/50 dark:bg-violet-950/20"
       style={{ borderWidth: '0.5px' }}
     >
-      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-500 dark:bg-blue-950/40 dark:text-blue-300">
-        <Sparkles size={18} />
-      </div>
-      <h3 className="text-[15px] font-medium text-gray-800 dark:text-gray-200">You're caught up</h3>
-      <p className="mx-auto mt-1 max-w-sm text-[13px] leading-6 text-gray-500 dark:text-gray-500">
-        Orbit will surface more questions as you keep using it. Check back later.
+      <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.14em] text-violet-500 dark:text-violet-300">
+        Check-in
       </p>
+      <p className="text-[15px] leading-7 text-gray-800 dark:text-gray-100">{message.content}</p>
+      <QuickReplyChips replies={quickReplies} onSelect={onQuickReply} />
     </motion.div>
   )
 }
 
-function LearnedAccordion({
+function CompanionThread({
+  messages,
+  onQuickReply,
+}: {
+  messages: CompanionMessageItem[]
+  onQuickReply: (label: string) => void
+}) {
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  if (messages.length === 0) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
+        <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-500 dark:bg-blue-950/40 dark:text-blue-300">
+          <Sparkles size={18} />
+        </div>
+        <h3 className="text-[15px] font-medium text-gray-800 dark:text-gray-200">Your companion is listening</h3>
+        <p className="mx-auto mt-1 max-w-sm text-[13px] leading-6 text-gray-500 dark:text-gray-500">
+          Share an update, answer a question, or just say what&apos;s on your mind.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
+      {messages.map((message) => (
+        <article
+          key={message.id}
+          className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
+        >
+          <div
+            className={`max-w-[min(85%,42rem)] px-4 py-3 text-[14px] leading-7 ${
+              message.role === 'user'
+                ? 'rounded-2xl rounded-br-sm bg-blue-500 text-white'
+                : 'rounded-2xl rounded-bl-sm bg-gray-50 text-gray-800 dark:bg-gray-800/30 dark:text-gray-200'
+            }`}
+          >
+            <p className="whitespace-pre-wrap">{message.content}</p>
+            {message.role === 'assistant' && (
+              <QuickReplyChips replies={parseQuickReplies(message.meta)} onSelect={onQuickReply} />
+            )}
+          </div>
+        </article>
+      ))}
+      <div ref={bottomRef} />
+    </div>
+  )
+}
+
+function QuickReplyChips({
+  replies,
+  onSelect,
+}: {
+  replies: QuickReply[]
+  onSelect: (label: string) => void
+}) {
+  if (replies.length === 0) return null
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {replies.map((reply) => (
+        <button
+          key={reply.id ?? reply.label}
+          type="button"
+          onClick={() => onSelect(reply.label)}
+          className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[12px] text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#1C1C1E] dark:text-gray-300 dark:hover:border-gray-600"
+          style={{ borderWidth: '0.5px' }}
+        >
+          {reply.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CapturedMomentsTimeline({
   open,
   onToggle,
-  selfProfile,
-  answeredGroups,
-  answeredCount,
+  timeline,
 }: {
   open: boolean
   onToggle: () => void
-  selfProfile: string
-  answeredGroups: CuriousAnsweredGroup[]
-  answeredCount: number
+  timeline: CompanionTimelineEntry[]
 }) {
+  const grouped = useMemo(() => groupTimelineByDay(timeline), [timeline])
+
   return (
     <section
       className="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
@@ -450,11 +438,9 @@ function LearnedAccordion({
         className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
       >
         <div className="flex items-baseline gap-3">
-          <span className="text-[14px] font-semibold text-gray-800 dark:text-gray-200">What Orbit's learned</span>
+          <span className="text-[14px] font-semibold text-gray-800 dark:text-gray-200">Captured moments</span>
           <span className="text-[12px] text-gray-500 dark:text-gray-500">
-            <span className="tabular-nums">{answeredCount}</span> answer{answeredCount === 1 ? '' : 's'}
-            <span className="px-1.5 text-gray-300 dark:text-gray-700">·</span>
-            <span className="tabular-nums">{answeredGroups.length}</span> bucket{answeredGroups.length === 1 ? '' : 's'}
+            <span className="tabular-nums">{timeline.length}</span> moment{timeline.length === 1 ? '' : 's'}
           </span>
         </div>
         <ChevronDown
@@ -465,90 +451,37 @@ function LearnedAccordion({
 
       {open && (
         <div className="border-t border-gray-100 px-5 py-5 dark:border-gray-800">
-          {selfProfile && (
-            <div className="mb-6">
-              <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">
-                Self profile
-              </p>
-              <p className="text-[14px] leading-7 text-gray-700 dark:text-gray-300">{selfProfile}</p>
-            </div>
-          )}
-
-          <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">
-            Answered by bucket
-          </p>
-          {answeredGroups.length === 0 ? (
+          {timeline.length === 0 ? (
             <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-4 py-6 text-center text-[13px] text-gray-400 dark:border-gray-700 dark:bg-[#18181A]">
-              Nothing answered yet.
+              Nothing captured yet. Share an update in the conversation above.
             </p>
           ) : (
-            <div className="grid gap-3 md:grid-cols-2">
-              {answeredGroups.map((group) => (
-                <article
-                  key={group.target_bucket_key}
-                  className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 dark:border-gray-800 dark:bg-[#18181A]"
-                  style={{ borderWidth: '0.5px' }}
-                >
-                  <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-gray-400 dark:text-gray-500">
-                    {group.target_bucket_name}
-                    <span className="ml-1 text-gray-300 dark:text-gray-700">·</span>
-                    <span className="ml-1 tabular-nums">{group.answers.length}</span>
+            <div className="space-y-6">
+              {grouped.map(([dayLabel, entries]) => (
+                <div key={dayLabel}>
+                  <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">
+                    {dayLabel}
                   </p>
-                  <div className="mt-2 space-y-1">
-                    {group.answers.map((answer) => (
-                      <button
-                        key={answer.life_item_id}
-                        type="button"
-                        onClick={() => {
-                          window.location.href = `/chat?item=${answer.life_item_id}`
-                        }}
-                        className="block w-full rounded-md px-2 py-1.5 text-left text-[13px] leading-5 text-gray-600 transition-colors hover:bg-white dark:text-gray-300 dark:hover:bg-[#202024]"
+                  <div className="space-y-2">
+                    {entries.map((entry) => (
+                      <article
+                        key={entry.id}
+                        className="rounded-xl border border-gray-200 bg-gray-50/60 px-4 py-3 dark:border-gray-800 dark:bg-[#18181A]"
+                        style={{ borderWidth: '0.5px' }}
                       >
-                        {answer.bucket_update_text}
-                      </button>
+                        <p className="text-[13px] leading-6 text-gray-700 dark:text-gray-300">{entry.text}</p>
+                        <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
+                          {formatTime(entry.captured_at)}
+                        </p>
+                      </article>
                     ))}
                   </div>
-                </article>
+                </div>
               ))}
             </div>
           )}
         </div>
       )}
-    </section>
-  )
-}
-
-function UserModelPreview({
-  preview,
-}: {
-  preview: CuriousPageState['preview']
-}) {
-  return (
-    <section
-      className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
-      style={{ borderWidth: '0.5px' }}
-    >
-      <h2 className="text-[14px] font-semibold text-gray-800 dark:text-gray-200">What I'll add to your user model</h2>
-      <div className="mt-3 grid gap-3 md:grid-cols-2">
-        {preview.map((group) => (
-          <article
-            key={group.target_bucket_key}
-            className="rounded-xl border border-gray-200 bg-gray-50/70 p-3 dark:border-gray-800 dark:bg-[#18181A]"
-            style={{ borderWidth: '0.5px' }}
-          >
-            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-gray-400 dark:text-gray-500">
-              {group.target_bucket_name}
-            </p>
-            <ul className="mt-2 space-y-1.5">
-              {group.lines.map((line) => (
-                <li key={line} className="text-[13px] leading-5 text-gray-600 dark:text-gray-300">
-                  {line}
-                </li>
-              ))}
-            </ul>
-          </article>
-        ))}
-      </div>
     </section>
   )
 }
@@ -566,6 +499,12 @@ function CuriousSettingsPopover({
   const notify = settings.notify_questions_enabled !== false
   const paused = settings.curious_paused === true
   const maxWeekly = typeof settings.max_new_questions_per_week === 'number' ? settings.max_new_questions_per_week : 3
+  const personaPreset =
+    typeof settings.companion_persona_preset === 'string' ? settings.companion_persona_preset : 'warm'
+  const personaOverride =
+    typeof settings.companion_persona_override === 'string' ? settings.companion_persona_override : ''
+  const checkinsPerDay =
+    typeof settings.companion_checkins_per_day === 'number' ? settings.companion_checkins_per_day : 0
 
   useEffect(() => {
     function onDocClick(event: MouseEvent) {
@@ -591,6 +530,49 @@ function CuriousSettingsPopover({
     >
       <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400">Curious settings</p>
       <div className="mt-4 space-y-4">
+        <label className="grid gap-2">
+          <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200">Companion persona</span>
+          <select
+            value={personaPreset}
+            onChange={(event) => onChange({ companion_persona_preset: event.target.value })}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-[13px] text-gray-800 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-200"
+            style={{ borderWidth: '0.5px' }}
+          >
+            <option value="warm">Warm</option>
+            <option value="coach">Coach</option>
+            <option value="gentle">Gentle</option>
+            <option value="direct">Direct</option>
+          </select>
+        </label>
+
+        <label className="grid gap-2">
+          <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200">Persona override</span>
+          <textarea
+            value={personaOverride}
+            onChange={(event) => onChange({ companion_persona_override: event.target.value })}
+            rows={3}
+            placeholder="Optional instructions for your companion…"
+            className="resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-[13px] text-gray-800 outline-none placeholder:text-gray-400 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-200"
+            style={{ borderWidth: '0.5px' }}
+          />
+        </label>
+
+        <label className="grid gap-2">
+          <span className="flex items-center justify-between text-[13px] font-medium text-gray-800 dark:text-gray-200">
+            <span>Check-ins per day</span>
+            <span className="text-gray-400">{checkinsPerDay === 0 ? 'Off' : checkinsPerDay}</span>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={6}
+            value={checkinsPerDay}
+            onChange={(event) => onChange({ companion_checkins_per_day: Number(event.target.value) })}
+            className="w-full accent-violet-500"
+          />
+          <span className="text-[12px] leading-5 text-gray-400">0 turns proactive check-ins off.</span>
+        </label>
+
         <label className="flex items-start justify-between gap-4">
           <span>
             <span className="block text-[13px] font-medium text-gray-800 dark:text-gray-200">Notify me when new questions appear</span>
@@ -634,4 +616,40 @@ function CuriousSettingsPopover({
       </div>
     </div>
   )
+}
+
+function parseQuickReplies(meta: Record<string, unknown>): QuickReply[] {
+  const raw = meta.quick_replies
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((item) => {
+      if (typeof item === 'string') return { label: item }
+      if (item && typeof item === 'object' && 'label' in item && typeof item.label === 'string') {
+        return {
+          id: typeof item.id === 'string' ? item.id : undefined,
+          label: item.label,
+        }
+      }
+      return null
+    })
+    .filter((item): item is QuickReply => item !== null)
+}
+
+function groupTimelineByDay(timeline: CompanionTimelineEntry[]): Array<[string, CompanionTimelineEntry[]]> {
+  const groups = new Map<string, CompanionTimelineEntry[]>()
+  for (const entry of timeline) {
+    const dayLabel = new Date(entry.captured_at).toLocaleDateString(undefined, {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+    })
+    const bucket = groups.get(dayLabel) ?? []
+    bucket.push(entry)
+    groups.set(dayLabel, bucket)
+  }
+  return [...groups.entries()]
+}
+
+function formatTime(value: string): string {
+  return new Date(value).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
