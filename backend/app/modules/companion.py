@@ -372,6 +372,113 @@ def _companion_ask(session_id: UUID | str) -> dict[str, Any]:
     }
 
 
+def synthesize_companion_session(session_id: UUID | str) -> None:
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT role, content
+                FROM companion_messages
+                WHERE session_id = %s
+                ORDER BY created_at
+                """,
+                (session_id,),
+            )
+            messages = cur.fetchall()
+            cur.execute(
+                """
+                SELECT id
+                FROM life_items
+                WHERE item_type = 'curious_capture'
+                    AND payload ->> 'session_id' = %s
+                    AND lifecycle_status <> 'deleted'
+                ORDER BY created_at
+                """,
+                (str(session_id),),
+            )
+            capture_rows = cur.fetchall()
+
+    if not messages:
+        return
+
+    transcript = "\n".join(f"{row['role']}: {row['content']}" for row in messages)
+    try:
+        data = generate_json(
+            f"Conversation:\n{transcript}\n\n"
+            'Return JSON: {"facts":[{"bucket_key":"...", "text":"..."}]}',
+            system=(
+                "Extract durable facts about the person from this companion conversation. "
+                "Return only JSON."
+            ),
+            temperature=0.1,
+            max_output_tokens=600,
+        )
+        raw_facts = data.get("facts") or []
+        if not isinstance(raw_facts, list):
+            return
+    except (LLMUnavailable, Exception):
+        return
+
+    link_item_id = capture_rows[0]["id"] if capture_rows else session_id
+    facts = []
+    for fact in raw_facts:
+        if not isinstance(fact, dict):
+            continue
+        bucket_key = fact.get("bucket_key")
+        if bucket_key not in KNOWN_BUCKET_KEYS:
+            continue
+        text = str(fact.get("text") or "").strip()
+        if text:
+            facts.append((bucket_key, text))
+
+    if not facts:
+        return
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            for bucket_key, text in facts:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM story_buckets
+                    WHERE stable_key = %s AND status = 'active'
+                    """,
+                    (bucket_key,),
+                )
+                bucket = cur.fetchone()
+                if bucket is None:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO bucket_updates (
+                        story_bucket_id, life_item_id, status, update_text, source_event
+                    )
+                    VALUES (%s, %s, 'pending', %s, %s)
+                    """,
+                    (
+                        bucket["id"],
+                        link_item_id,
+                        text,
+                        Jsonb({
+                            "source": "curious_companion",
+                            "session_id": str(session_id),
+                            "bucket_key": bucket_key,
+                        }),
+                    ),
+                )
+            cur.execute(
+                """
+                UPDATE life_items
+                SET bucket_update_status = 'complete',
+                    updated_at = now()
+                WHERE item_type = 'curious_capture'
+                    AND payload ->> 'session_id' = %s
+                    AND lifecycle_status <> 'deleted'
+                """,
+                (str(session_id),),
+            )
+
+
 def _foundational_question_fallback() -> dict[str, Any]:
     page_state = get_curious_page_state()
     if page_state.pending_questions:

@@ -172,6 +172,80 @@ def test_volunteered_fact_gets_short_ack_not_a_question(tmp_path, monkeypatch) -
     assert "quick_replies" not in reply or reply["quick_replies"] == []
 
 
+def test_synthesis_queues_bucket_updates_from_captures(tmp_path, monkeypatch) -> None:
+    from app.modules.companion import (
+        get_or_create_companion_session,
+        record_user_turn,
+        synthesize_companion_session,
+    )
+
+    _ready_companion(tmp_path)
+    import app.modules.companion as companion
+
+    session = get_or_create_companion_session()
+    record_user_turn(session["id"], "My EAD card was approved today")
+    monkeypatch.setattr(
+        companion, "generate_json",
+        lambda *a, **k: {"facts": [
+            {"bucket_key": "career", "text": "Person's EAD work authorization was approved."}
+        ]},
+    )
+    synthesize_companion_session(session["id"])
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT update_text, status, source_event FROM bucket_updates "
+                "WHERE source_event ->> 'source' = 'curious_companion'"
+            )
+            rows = cur.fetchall()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "pending"
+    assert "EAD" in rows[0]["update_text"]
+
+
+def test_synthesis_no_facts_when_llm_down(tmp_path) -> None:
+    from app.modules.companion import (
+        get_or_create_companion_session,
+        record_user_turn,
+        synthesize_companion_session,
+    )
+
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+    record_user_turn(session["id"], "My EAD card was approved today")
+    synthesize_companion_session(session["id"])
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM life_items WHERE item_type = 'curious_capture'")
+            assert cur.fetchone()["c"] == 1
+
+
+def test_weave_merges_companion_updates(tmp_path, monkeypatch) -> None:
+    from app.modules.curious import weave_pending_curious_updates
+
+    _ready_companion(tmp_path)
+    import app.modules.companion as companion
+
+    session = companion.get_or_create_companion_session()
+    companion.record_user_turn(session["id"], "My EAD card was approved today")
+    monkeypatch.setattr(
+        companion, "generate_json",
+        lambda *a, **k: {"facts": [
+            {"bucket_key": "career", "text": "Person's EAD work authorization was approved."}
+        ]},
+    )
+    companion.synthesize_companion_session(session["id"])
+
+    result = weave_pending_curious_updates()
+    merged = sum(r.merged_count for r in result.results)
+    assert merged >= 1
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT content FROM story_buckets WHERE stable_key = 'career'")
+            assert "EAD" in cur.fetchone()["content"]
+
+
 def test_filler_user_turn_records_message_but_no_capture(tmp_path) -> None:
     from app.modules.companion import get_or_create_companion_session, record_user_turn
 
