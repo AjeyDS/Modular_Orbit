@@ -26,9 +26,12 @@ reviewed size-triggered bucket splitting.
 
 ## Evidence from live debugging (why these are needed)
 
-- `goals.md` contains only section headers; `app/user_model/goals.py` exposes
-  `list_goals` / `promote_goal` / `ensure_goals_seed` — no create/update/delete.
-  No goal routes in `app/api/user_model.py`. No goals UI.
+- **Goals live in a Postgres `goals` table** (columns: `id`, `goal_id` unique
+  slug, `title`, `body`, `status` CHECK active|tentative, `position`,
+  timestamps). `goals.md` is only a one-time legacy seed source. The table is
+  empty (only the seed ran, with nothing to seed). `app/user_model/goals.py`
+  exposes `list_goals` / `promote_goal` / `ensure_goals_seed` — no
+  create/update/delete. No goal routes in `app/api/user_model.py`. No goals UI.
 - Live DB: 6 documents, all `bucket_update_status = not_needed`, **0**
   document-sourced `bucket_updates`; 16 document connections, all
   `target_type = life_item`.
@@ -46,9 +49,9 @@ reviewed size-triggered bucket splitting.
 
 - **Goals are first-class in BOTH ways:** a full Goals management page AND casual
   proposal capture from **Companion + Logs + Chat**.
-- **Goal storage:** stays in `goals.md` with stable IDs (architecture invariant;
-  connections point at goal IDs). CRUD parses/rewrites `goals.md` preserving
-  other goals' prose and IDs.
+- **Goal storage:** the Postgres `goals` table (runtime source of truth;
+  `goals.md` is legacy seed only). CRUD is plain SQL; `goal_id` is a stable slug
+  generated from the title, preserved across edits (connections point at it).
 - **Casually-proposed goals default to `Tentative`** (manual promotion rule).
 - **Document enrichment is selective and content-based, not lexical-connection-
   based.** Reuse the companion pattern: an LLM step routes a document's meaning
@@ -67,19 +70,13 @@ reviewed size-triggered bucket splitting.
 
 ### 1. Goals
 
-**Storage / service** (`app/user_model/goals.py`):
-- `goals.md` format per goal:
-  ```
-  <!-- goal: build-data-career -->
-  ## Build a data engineering career
-  Reason and context…
-  ```
+**Storage / service** (`app/user_model/goals.py`, on the `goals` table):
 - New functions: `create_goal(title, body, status="tentative") -> GoalEntry`
-  (slugifies title → stable ID; appends to the correct section; numeric suffix
-  on slug collision), `update_goal(goal_id, *, title=None, body=None)`,
-  `delete_goal(goal_id)`. Existing `promote_goal` (Tentative→Active) and
-  `list_goals` stay. All operations parse the whole file, mutate one block, and
-  rewrite — preserving every other goal's ID and prose.
+  (slugifies title → stable `goal_id`; numeric suffix on slug collision;
+  `position` = max(position)+1 within the status), `update_goal(goal_id, *,
+  title=None, body=None)`, `delete_goal(goal_id)`. Existing `promote_goal`
+  (Tentative→Active) and `list_goals` stay. All plain SQL on the `goals` table;
+  `goal_id` is immutable across edits so connections never break.
 
 **API** (`app/api/user_model.py`):
 - `GET /user-model/goals` (list), `POST /user-model/goals` (create),
@@ -131,18 +128,16 @@ already lists them as candidates, so items begin linking to goals automatically.
 - All new LLM calls wrapped in `try/except (LLMUnavailable, Exception)` with
   deterministic fallbacks. Document routing failure → treat as `[]` (no
   enrichment; document still ingested + chunked).
-- `goals.md` parsing tolerant of missing sections, blank files, and unknown
-  content; never drop or reorder unrelated goals; slug collisions get a numeric
-  suffix. Goal CRUD is idempotent where it can be (delete of a missing ID is a
-  no-op/404 at the API).
+- Goal CRUD: slug collisions get a numeric suffix; `goal_id` immutable across
+  edits; delete/update of a missing ID raises → 404 at the API.
 - Goal proposal detection guarded like other Capture Proposals (explicit always
   works; suggested suppressed on questions/lookups per the existing guard).
 
 ### Testing
 
-- **Goals service:** create → appears under the right section with a stable ID;
-  update preserves ID and other goals; promote moves Tentative→Active; delete
-  removes only the target; slug collision suffixing; round-trip parse/rewrite.
+- **Goals service:** create → row with a stable `goal_id` and correct status;
+  update preserves `goal_id`; promote moves Tentative→Active; delete removes only
+  the target; slug collision suffixing.
 - **Goals API:** full CRUD + promote happy paths and 404s.
 - **Goal proposal detection:** explicit "add as goal" + suggested goal intent →
   `module_id="goals"`, defaults to tentative; LLM-down fallback; questions
