@@ -127,6 +127,22 @@ def test_is_focus_query() -> None:
     assert _is_focus_query("when is my dentist appointment?") is False
 
 
+def test_is_advice_query() -> None:
+    from app.chat.actions import _is_advice_query
+
+    assert _is_advice_query("what can I learn next to fuel my career?") is True
+    assert _is_advice_query("how can I improve from here?") is True
+    assert _is_advice_query("when is my dentist appointment?") is False
+
+
+def test_advice_query_forces_actionable_modules() -> None:
+    from app.chat.actions import _route_and_classify
+
+    decision = _route_and_classify("what can I learn next to fuel my career?")
+    assert {"tasks", "plans", "routines", "goals"} <= set(decision.modules)
+    assert decision.breadth == "broad"
+
+
 def test_focus_query_forces_actionable_modules() -> None:
     from app.chat.actions import _route_and_classify
 

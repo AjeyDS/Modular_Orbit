@@ -45,6 +45,20 @@ _FOCUS_MARKERS = (
     "whats important",
 )
 _ACTIONABLE_MODULES = frozenset({"tasks", "plans", "routines", "goals"})
+_ADVICE_MARKERS = (
+    "what can i learn",
+    "what should i learn",
+    "what to learn",
+    "what am i missing",
+    "how do i improve",
+    "how can i improve",
+    "level up",
+    "fuel my career",
+    "make the most",
+    "what's next",
+    "whats next",
+    "what should i do next",
+)
 QUERYABLE_MODULES = frozenset({"tasks", "plans", "goals", "routines"})
 
 
@@ -1091,6 +1105,11 @@ def _is_focus_query(message: str) -> bool:
     return any(marker in lowered for marker in _FOCUS_MARKERS)
 
 
+def _is_advice_query(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _ADVICE_MARKERS)
+
+
 def _finalize_route_decision(
     message: str,
     *,
@@ -1100,7 +1119,7 @@ def _finalize_route_decision(
     modules: list[str],
     rationale: str,
 ) -> RouteDecision:
-    if _is_focus_query(message):
+    if _is_focus_query(message) or _is_advice_query(message):
         modules = sorted(set(modules) | _ACTIONABLE_MODULES)
         breadth = "broad"
     return RouteDecision(
