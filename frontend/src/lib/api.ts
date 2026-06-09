@@ -330,12 +330,6 @@ export interface CompanionMessageItem {
   created_at: string
 }
 
-export interface CompanionTimelineEntry {
-  id: string
-  text: string
-  captured_at: string
-}
-
 export interface CompanionReply {
   kind: string
   message: string
@@ -345,7 +339,6 @@ export interface CompanionReply {
 
 export interface CompanionState {
   messages: CompanionMessageItem[]
-  timeline: CompanionTimelineEntry[]
   pending_checkin: CompanionMessageItem | null
   settings: Record<string, unknown>
 }
@@ -587,6 +580,91 @@ export function respondToChat(payload: {
   })
 }
 
+export interface StreamChatHandlers {
+  onStage?: (stage: string) => void
+  onAnswerDelta?: (delta: string) => void
+  onDone?: (suggestions: CaptureProposalPreview[]) => void
+}
+
+async function consumeSseStream(
+  response: Response,
+  handlers: StreamChatHandlers,
+): Promise<void> {
+  if (!response.body) {
+    throw new Error('Streaming response had no body')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const parts = buffer.split('\n\n')
+    buffer = parts.pop() ?? ''
+    for (const part of parts) {
+      for (const line of part.split('\n')) {
+        if (!line.startsWith('data:')) continue
+        const event = JSON.parse(line.slice(5).trim()) as {
+          stage?: string
+          delta?: string
+          suggestions?: CaptureProposalPreview[]
+        }
+        if (event.stage === 'answer' && event.delta) {
+          handlers.onAnswerDelta?.(event.delta)
+        } else if (event.stage === 'done') {
+          handlers.onDone?.(event.suggestions ?? [])
+        } else if (event.stage) {
+          handlers.onStage?.(event.stage)
+        }
+      }
+    }
+  }
+}
+
+export async function streamChat(
+  payload: { session_id: string; mode: ChatMode; message: string },
+  handlers: StreamChatHandlers,
+): Promise<void> {
+  let lastError = 'Network request failed'
+
+  for (const base of API_BASES) {
+    const url = `${base}/chat/respond/stream`
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!response.ok) {
+        let detail = `${url}: ${response.status} ${response.statusText}`
+        try {
+          const body = await response.json()
+          const bodyDetail =
+            typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail ?? body)
+          detail = `${url}: ${bodyDetail}`
+        } catch {
+          // Keep status text fallback.
+        }
+        lastError = detail
+        if (response.status === 404 || response.status >= 500) continue
+        throw new Error(detail)
+      }
+      await consumeSseStream(response, handlers)
+      return
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : `${url}: request failed`
+      continue
+    }
+  }
+
+  const fallback = await respondToChat(payload)
+  handlers.onAnswerDelta?.(fallback.answer)
+  handlers.onDone?.(fallback.suggestions)
+}
+
 export function confirmCaptureProposal(proposalId: string): Promise<ConfirmCaptureProposalResponse> {
   return apiFetch<ConfirmCaptureProposalResponse>('/chat/capture-proposals/confirm', {
     method: 'POST',
@@ -677,6 +755,17 @@ export function sendCompanionMessage(message: string): Promise<CompanionMessageR
   return apiFetch<CompanionMessageResponse>('/modules/curious/companion/message', {
     method: 'POST',
     body: JSON.stringify({ message }),
+  })
+}
+
+export function askCompanionQuestion(): Promise<CompanionMessageResponse> {
+  return apiFetch<CompanionMessageResponse>('/modules/curious/companion/ask', { method: 'POST' })
+}
+
+export function skipCompanionQuestion(bucketKey?: string | null): Promise<CompanionMessageResponse> {
+  return apiFetch<CompanionMessageResponse>('/modules/curious/companion/skip', {
+    method: 'POST',
+    body: JSON.stringify({ bucket_key: bucketKey ?? null }),
   })
 }
 
