@@ -13,6 +13,7 @@ import {
   Plus,
   ScrollText,
   ShieldCheck,
+  Target,
   Trash2,
   X,
 } from 'lucide-react'
@@ -33,6 +34,7 @@ export const chatSessionChangedEvent = 'orbit:chat-session-changed'
 
 function activeTab(pathname: string): SidebarTab {
   if (pathname === '/logs') return 'modules'
+  if (pathname === '/goals') return 'modules'
   if (pathname === '/user-model') return 'modules'
   if (pathname.startsWith('/modules')) return 'modules'
   return 'chat'
@@ -371,6 +373,7 @@ function ModulesPane({ orderedModules }: { orderedModules: ModuleInstanceItem[] 
 function modulePath(moduleId: string) {
   if (moduleId === 'chat') return '/chat'
   if (moduleId === 'logs') return '/logs'
+  if (moduleId === 'goals') return '/goals'
   if (moduleId === 'user_model') return '/user-model'
   return `/modules/${moduleId}`
 }
@@ -380,6 +383,7 @@ function moduleIcon(moduleId: string) {
   if (moduleId === 'plans') return <NotebookTabs size={15} />
   if (moduleId === 'documents') return <FileText size={15} />
   if (moduleId === 'logs') return <ScrollText size={15} />
+  if (moduleId === 'goals') return <Target size={15} />
   if (moduleId === 'curious') return <CircleHelp size={15} />
   if (moduleId === 'user_model') return <ShieldCheck size={15} />
   return <Boxes size={15} />

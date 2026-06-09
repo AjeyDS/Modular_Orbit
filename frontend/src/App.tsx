@@ -12,6 +12,7 @@ import {
 import ChatPage from './pages/ChatPage'
 import CuriousPage from './pages/CuriousPage'
 import DocumentsPage from './pages/DocumentsPage'
+import GoalsPage from './pages/GoalsPage'
 import LogsPage from './pages/LogsPage'
 import ModulesPage from './pages/ModulesPage'
 import PlansPage from './pages/PlansPage'
@@ -94,6 +95,7 @@ function AppContent() {
               <Route path="/chat" element={<ChatPage />} />
               <Route path="/modules/curious" element={<CuriousPage />} />
               <Route path="/logs" element={<LogsPage />} />
+              <Route path="/goals" element={<GoalsPage />} />
               <Route path="/modules/tasks" element={<TasksPage />} />
               <Route path="/modules/plans" element={<PlansPage />} />
               <Route path="/modules/documents" element={<DocumentsPage />} />
