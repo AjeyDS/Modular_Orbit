@@ -397,6 +397,25 @@ def ensure_schema() -> None:
 
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS companion_messages (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    session_id UUID NOT NULL REFERENCES life_items(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL CHECK (role IN ('assistant', 'user')),
+                    content TEXT NOT NULL,
+                    meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_companion_messages_session
+                    ON companion_messages (session_id, created_at)
+                """
+            )
+
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS capture_proposals (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
