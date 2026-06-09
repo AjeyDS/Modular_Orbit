@@ -31,6 +31,7 @@ _BROAD_MARKERS = (
     "my life", "everything", "overall", "in general", "priorities",
     "where should i", "how am i doing",
 )
+QUERYABLE_MODULES = frozenset({"tasks", "plans", "goals", "routines"})
 
 
 @dataclass
@@ -38,6 +39,7 @@ class RouteDecision:
     breadth: str  # "narrow" | "broad"
     buckets: list[str] = field(default_factory=list)
     expansion_terms: list[str] = field(default_factory=list)
+    modules: list[str] = field(default_factory=list)
     rationale: str = ""
 
 CONFIDENCE_SCORES: dict[ConfidenceBucket, float] = {
@@ -897,14 +899,26 @@ def _route_and_classify(message: str) -> RouteDecision:
             terms = []
         if not buckets:
             buckets = _select_buckets_fallback(message, catalog)
-        return RouteDecision(breadth=breadth, buckets=buckets, expansion_terms=terms,
-                             rationale=str(data.get("rationale") or ""))
+        modules = [
+            m for m in (data.get("modules") or [])
+            if isinstance(m, str) and m in QUERYABLE_MODULES
+        ]
+        if not modules:
+            modules = _modules_fallback(message)
+        return RouteDecision(
+            breadth=breadth,
+            buckets=buckets,
+            expansion_terms=terms,
+            modules=modules,
+            rationale=str(data.get("rationale") or ""),
+        )
     except (LLMUnavailable, Exception):
         breadth = _breadth_fallback(message)
         return RouteDecision(
             breadth=breadth,
             buckets=_select_buckets_fallback(message, catalog),
             expansion_terms=[],
+            modules=_modules_fallback(message),
             rationale="lexical fallback",
         )
 
@@ -967,12 +981,30 @@ def _retrieval_query(message: str, decision: RouteDecision) -> str:
     return message
 
 
+def _modules_fallback(message: str) -> list[str]:
+    lowered = message.lower()
+    modules: list[str] = []
+    if re.search(r"\b(due|overdue|task|todo)\b", lowered):
+        modules.append("tasks")
+    if re.search(r"\b(plan|progress|step|milestone)\b", lowered):
+        modules.append("plans")
+    if re.search(r"\b(goal|aspir|aiming)\b", lowered):
+        modules.append("goals")
+    if re.search(r"\b(routine|habit|streak|daily)\b", lowered):
+        modules.append("routines")
+    return modules
+
+
 def _route_prompt(message: str, catalog: list[dict[str, str]]) -> str:
+    queryable = ", ".join(sorted(QUERYABLE_MODULES))
     lines = "\n".join(f"- {b['stable_key']}: {b['display_name']} — {b['description']}" for b in catalog)
     return (
         "Buckets:\n" + lines + "\n\n"
+        f"Queryable modules: {queryable}. Pick modules whose structured data would help answer "
+        "the query, or [] if none.\n\n"
         'Return JSON: {"breadth":"narrow|broad","buckets":["key"],'
-        '"expansion_terms":["..."],"rationale":"one line"}\n\n'
+        '"expansion_terms":["..."],"modules":["tasks|plans|goals|routines"],'
+        '"rationale":"one line"}\n\n'
         f"Query:\n{message}"
     )
 

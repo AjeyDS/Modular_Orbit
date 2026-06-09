@@ -119,6 +119,18 @@ def test_router_fallback_selects_buckets_and_breadth(tmp_path) -> None:
     assert narrow.expansion_terms == []
 
 
+def test_router_selects_modules_via_lexical_fallback() -> None:
+    from app.chat.actions import _route_and_classify, QUERYABLE_MODULES
+
+    d1 = _route_and_classify("what tasks are overdue?")
+    assert "tasks" in d1.modules
+    d2 = _route_and_classify("did I do my routine today?")
+    assert "routines" in d2.modules
+    d3 = _route_and_classify("tell me a story about the ocean")
+    assert d3.modules == []
+    assert d1.modules == [m for m in d1.modules if m in QUERYABLE_MODULES]
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))
