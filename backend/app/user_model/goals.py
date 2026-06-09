@@ -98,6 +98,58 @@ def list_goals() -> list[GoalEntry]:
             ]
 
 
+def _slugify_goal(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    slug = re.sub(r"-+", "-", slug)
+    return slug[:60].strip("-") or "goal"
+
+
+def create_goal(
+    title: str,
+    body: str = "",
+    status: GoalStatus = "tentative",
+    horizon: str = "long_term",
+    target_date: date | None = None,
+    target_note: str | None = None,
+) -> GoalEntry:
+    base = _slugify_goal(title)
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            goal_id = base
+            n = 2
+            while True:
+                cur.execute("SELECT 1 FROM goals WHERE goal_id = %s", (goal_id,))
+                if cur.fetchone() is None:
+                    break
+                goal_id = f"{base}-{n}"
+                n += 1
+            cur.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 AS p FROM goals WHERE status = %s",
+                (status,),
+            )
+            position = cur.fetchone()["p"]
+            cur.execute(
+                """
+                INSERT INTO goals (
+                    goal_id, title, body, status, position, horizon, target_date, target_note
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING goal_id, title, body, status, horizon, target_date, target_note
+                """,
+                (goal_id, title, body, status, position, horizon, target_date, target_note),
+            )
+            row = cur.fetchone()
+    return GoalEntry(
+        goal_id=row["goal_id"],
+        title=row["title"],
+        body=row["body"] or "",
+        status=row["status"],
+        horizon=row["horizon"],
+        target_date=row["target_date"],
+        target_note=row["target_note"],
+    )
+
+
 def promote_goal(goal_id: str) -> GoalEntry:
     """Move a Tentative Goal into Active while preserving its goal ID."""
     with transaction() as conn:

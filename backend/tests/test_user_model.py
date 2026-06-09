@@ -30,6 +30,41 @@ def registry_ready() -> None:
     sync_module_registry()
 
 
+def test_create_goal_inserts_tentative_with_stable_slug() -> None:
+    from app.user_model.goals import create_goal, list_goals
+
+    g = create_goal(title="Build a data engineering career", body="Because…")
+    assert g.goal_id == "build-a-data-engineering-career"
+    assert g.status == "tentative"
+    assert any(x.goal_id == g.goal_id for x in list_goals())
+
+
+def test_create_goal_slug_collision_gets_suffix() -> None:
+    from app.user_model.goals import create_goal
+
+    a = create_goal(title="Run a marathon", body="")
+    b = create_goal(title="Run a marathon", body="")
+    assert a.goal_id != b.goal_id
+    assert b.goal_id.startswith("run-a-marathon")
+
+
+def test_create_goal_round_trips_horizon_and_target_note() -> None:
+    from app.user_model.goals import create_goal
+
+    g = create_goal(
+        title="Ship MVP",
+        body="",
+        horizon="short_term",
+        target_note="6 months",
+    )
+    assert g.horizon == "short_term"
+    assert g.target_note == "6 months"
+    assert g.horizon != "long_term"
+
+    default_g = create_goal(title="Retire early", body="")
+    assert default_g.horizon == "long_term"
+
+
 def test_goal_entry_has_horizon_and_targets() -> None:
     from app.user_model.goals import GoalEntry
 
