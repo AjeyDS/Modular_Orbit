@@ -135,6 +135,16 @@ def test_focus_query_forces_actionable_modules() -> None:
     assert decision.breadth == "broad"
 
 
+def test_focus_query_includes_structured_context(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.modules.tasks import TaskCreate, create_task
+
+    create_task(TaskCreate(title="Renew passport"), review=False)
+    ctx = _build_answer_context("understanding", "what should I focus on today?")
+    assert "Structured data" in ctx
+    assert "Renew passport" in ctx
+
+
 def test_router_selects_modules_via_lexical_fallback() -> None:
     from app.chat.actions import _route_and_classify, QUERYABLE_MODULES
 
