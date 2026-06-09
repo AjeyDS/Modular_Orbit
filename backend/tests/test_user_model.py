@@ -30,6 +30,25 @@ def registry_ready() -> None:
     sync_module_registry()
 
 
+def test_goal_crud_http() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    created = client.post("/user-model/goals", json={"title": "Save 10k", "body": "buffer"})
+    assert created.status_code == 201
+    goal_id = created.json()["goal_id"]
+    assert client.get("/user-model/goals").status_code == 200
+    assert (
+        client.patch(f"/user-model/goals/{goal_id}", json={"body": "bigger buffer"}).json()["body"]
+        == "bigger buffer"
+    )
+    assert client.post(f"/user-model/goals/{goal_id}/promote").json()["status"] == "active"
+    assert client.delete(f"/user-model/goals/{goal_id}").status_code == 204
+    assert client.delete(f"/user-model/goals/{goal_id}").status_code == 404
+
+
 def test_update_goal_preserves_id() -> None:
     from app.user_model.goals import create_goal, update_goal
 
