@@ -437,10 +437,14 @@ def ensure_schema() -> None:
                     status TEXT NOT NULL DEFAULT 'previewed'
                         CHECK (status IN ('previewed', 'accepted', 'rejected')),
                     created_life_item_id UUID REFERENCES life_items(id) ON DELETE SET NULL,
+                    created_goal_id TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            cur.execute(
+                "ALTER TABLE capture_proposals ADD COLUMN IF NOT EXISTS created_goal_id TEXT"
             )
 
             cur.execute(

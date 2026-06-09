@@ -17,6 +17,7 @@ from app.modules.documents import DocumentCreate, create_document
 from app.modules.logs import LogCreate, create_log
 from app.modules.plans import PlanCreate, PlanStepCreate, create_plan
 from app.modules.tasks import TaskCreate, create_task
+from app.user_model.goals import create_goal
 from app.rag import retrieve_chunks
 from app.user_model import list_goals
 
@@ -81,12 +82,13 @@ class ConfirmCaptureProposalRequest(BaseModel):
 class ConfirmCaptureProposalResponse(BaseModel):
     proposal_id: UUID
     module_id: str
-    life_item_id: UUID
+    life_item_id: UUID | None = None
+    goal_id: str | None = None
     status: str
 
 
 class DetectedProposal(BaseModel):
-    module_id: Literal["logs", "tasks", "plans", "documents"]
+    module_id: Literal["logs", "tasks", "plans", "documents", "goals"]
     item_type: str
     title: str
     description: str = ""
@@ -315,14 +317,17 @@ Available modules:
 - logs: observations, updates, lightweight life events
 - plans: multi-step intentions
 - documents: durable reference text or notes
+- goals: a durable aspiration or direction the person wants, distinct from an actionable task
 
 Return JSON with this shape:
 {{
   "has_intent": boolean,
-  "module_id": "tasks" | "logs" | "plans" | "documents" | null,
+  "module_id": "tasks" | "logs" | "plans" | "documents" | "goals" | null,
   "title": string,
   "description": string,
   "confidence_bucket": "low" | "medium" | "high",
+  "horizon": "short_term" | "long_term",
+  "target_note": string,
   "payload": object
 }}
 
@@ -337,7 +342,7 @@ Message:
     if not data.get("has_intent"):
         return None
     module_id = data.get("module_id")
-    if module_id not in {"tasks", "logs", "plans", "documents"}:
+    if module_id not in {"tasks", "logs", "plans", "documents", "goals"}:
         return None
     confidence = data.get("confidence_bucket")
     if confidence not in {"low", "medium", "high"}:
@@ -348,6 +353,12 @@ Message:
     title = str(data.get("title") or _derive_title(message)).strip()
     description = str(data.get("description") or "").strip()
     payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    if module_id == "goals":
+        horizon = data.get("horizon")
+        if horizon not in {"short_term", "long_term"}:
+            horizon = "long_term"
+        target_note = str(data.get("target_note") or "").strip() or None
+        payload = {**payload, "horizon": horizon, "target_note": target_note}
     proposal = _proposal_for_module(module_id, description or message, explicit=False)
     return proposal.model_copy(
         update={
@@ -366,6 +377,7 @@ def _detect_explicit(message: str) -> DetectedProposal | None:
         (r"(?:log|save)\s+(?:this\s+)?(?:to\s+)?logs?\s*:?\s*(.+)", "logs"),
         (r"(?:make|create|save)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?plans?\s*:?\s*(.+)", "plans"),
         (r"(?:save|add)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?documents?\s*:?\s*(.+)", "documents"),
+        (r"(?:add|make|set)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?goals?\s*:?\s*(.+)", "goals"),
     ]
     for pattern, module_id in patterns:
         match = re.search(pattern, message, flags=re.IGNORECASE | re.DOTALL)
@@ -416,6 +428,16 @@ def _proposal_for_module(module_id: str, text: str, *, explicit: bool) -> Detect
             title=title,
             description=text,
             payload={"steps": steps},
+            confidence_bucket=bucket,
+            explicit_request=explicit,
+        )
+    if module_id == "goals":
+        return DetectedProposal(
+            module_id="goals",
+            item_type="goal",
+            title=title,
+            description=text,
+            payload={"horizon": "long_term"},
             confidence_bucket=bucket,
             explicit_request=explicit,
         )

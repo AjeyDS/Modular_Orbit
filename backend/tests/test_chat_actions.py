@@ -31,6 +31,12 @@ def test_questions_do_not_produce_capture_suggestions() -> None:
     assert _detect_capture_proposals("when is my appointment?") == []
 
 
+def test_explicit_add_goal_detected() -> None:
+    proposals = _detect_capture_proposals("add this as a goal: become a staff engineer")
+    assert proposals and proposals[0].module_id == "goals"
+    assert proposals[0].item_type == "goal"
+
+
 def test_explicit_add_still_works_inside_a_question_form() -> None:
     proposals = _detect_capture_proposals("add this to tasks: renew passport")
     assert proposals and proposals[0].module_id == "tasks"
