@@ -6,7 +6,6 @@ from typing import Any
 
 KNOWN_BUCKET_KEYS = {
     "who_am_i",
-    "goals",
     "interests_and_works",
     "career",
     "health",
