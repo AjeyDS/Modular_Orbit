@@ -53,6 +53,12 @@ reviewed size-triggered bucket splitting.
   `goals.md` is legacy seed only). CRUD is plain SQL; `goal_id` is a stable slug
   generated from the title, preserved across edits (connections point at it).
 - **Casually-proposed goals default to `Tentative`** (manual promotion rule).
+- **Goals have a time `horizon` (new axis, orthogonal to status):**
+  `short_term` (≈ ≤3 months) or `long_term` (≈ 1–10 years), default
+  `long_term`. Plus an optional `target_date` (DATE) **and** an optional
+  free-text `target_note` ("mid-2027", "next 6 months"). `created_at` already
+  records when the goal was written. Casual capture **auto-classifies** horizon
+  from phrasing, defaulting to `long_term` when unclear; the user can change it.
 - **Document enrichment is selective and content-based, not lexical-connection-
   based.** Reuse the companion pattern: an LLM step routes a document's meaning
   to 1–3 stable bucket keys; write pending bucket updates; weave. Do NOT touch
@@ -71,12 +77,16 @@ reviewed size-triggered bucket splitting.
 ### 1. Goals
 
 **Storage / service** (`app/user_model/goals.py`, on the `goals` table):
-- New functions: `create_goal(title, body, status="tentative") -> GoalEntry`
+- New columns: `horizon TEXT NOT NULL DEFAULT 'long_term' CHECK (horizon IN
+  ('short_term','long_term'))`, `target_date DATE`, `target_note TEXT`.
+  `GoalEntry` + `list_goals` expose all of them.
+- New functions: `create_goal(title, body, status="tentative",
+  horizon="long_term", target_date=None, target_note=None) -> GoalEntry`
   (slugifies title → stable `goal_id`; numeric suffix on slug collision;
   `position` = max(position)+1 within the status), `update_goal(goal_id, *,
-  title=None, body=None)`, `delete_goal(goal_id)`. Existing `promote_goal`
-  (Tentative→Active) and `list_goals` stay. All plain SQL on the `goals` table;
-  `goal_id` is immutable across edits so connections never break.
+  title=None, body=None, horizon=None, target_date=None, target_note=None)`,
+  `delete_goal(goal_id)`. Existing `promote_goal` (Tentative→Active) and
+  `list_goals` stay. All plain SQL; `goal_id` immutable across edits.
 
 **API** (`app/api/user_model.py`):
 - `GET /user-model/goals` (list), `POST /user-model/goals` (create),
@@ -84,15 +94,21 @@ reviewed size-triggered bucket splitting.
   `POST /user-model/goals/{goal_id}/promote`,
   `DELETE /user-model/goals/{goal_id}`.
 
-**Goals page (frontend):** lists Active + Tentative; add (title + reason), edit,
-promote, delete. Stable-ID-safe; optimistic updates.
+**Goals page (frontend):** lists Active + Tentative; add (title + reason +
+short/long horizon + optional target date + optional rough-timeframe note),
+edit, promote, delete. Stable-ID-safe; optimistic updates. May group/sort by
+horizon.
 
 **Casual capture (Companion + Logs + Chat):**
 - Extend the Capture Proposal system in `app/chat/actions.py`: add `"goals"` to
   `DetectedProposal.module_id` and the detection prompt. Goal-shaped intent = a
   durable aspiration/direction ("I want to…", "my goal is…", "I'm trying to
   build…"), distinct from a task (actionable) or plan (multi-step).
-- A confirmed goal proposal → `create_goal(..., status="tentative")`.
+- A confirmed goal proposal → `create_goal(..., status="tentative",
+  horizon=<classified>)`. The detector classifies `horizon` from phrasing
+  (near-term deadline language → `short_term`; durable direction → `long_term`),
+  defaulting `long_term`; may also extract a `target_note` when a timeframe is
+  mentioned.
 - Companion proposes a goal inline when conversation surfaces goal-shaped intent
   (reuse the same preview/confirm contract).
 
@@ -135,9 +151,10 @@ already lists them as candidates, so items begin linking to goals automatically.
 
 ### Testing
 
-- **Goals service:** create → row with a stable `goal_id` and correct status;
-  update preserves `goal_id`; promote moves Tentative→Active; delete removes only
-  the target; slug collision suffixing.
+- **Goals service:** create → row with a stable `goal_id`, correct status, and
+  `horizon` (default long_term); target_date/target_note round-trip; update
+  preserves `goal_id` and can change horizon/targets; promote moves
+  Tentative→Active; delete removes only the target; slug collision suffixing.
 - **Goals API:** full CRUD + promote happy paths and 404s.
 - **Goal proposal detection:** explicit "add as goal" + suggested goal intent →
   `module_id="goals"`, defaults to tentative; LLM-down fallback; questions

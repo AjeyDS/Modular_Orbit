@@ -79,6 +79,46 @@ In `companion.py`: replace the local `_normalize_bucket_key` and `_ALLOWED_KEYS_
 
 ## Phase B — Goals service CRUD
 
+> **Time-horizon fields (apply throughout Phase B/C/D/G):** goals gain
+> `horizon` (`short_term`|`long_term`, default `long_term`), optional
+> `target_date` (DATE), optional `target_note` (TEXT). `GoalEntry`, `list_goals`,
+> all create/update signatures, API models, and the Goals page include them.
+
+### Task B0: Schema columns + GoalEntry/list_goals
+
+**Files:** Modify `backend/app/db/schema.py` (goals table), `backend/app/user_model/goals.py` (`GoalEntry`, `list_goals`). Test: `backend/tests/test_user_model.py`.
+
+**Step 1: Failing test**
+
+```python
+from app.user_model.goals import list_goals, GoalEntry
+import dataclasses
+
+
+def test_goal_entry_has_horizon_and_targets() -> None:
+    fields = {f.name for f in dataclasses.fields(GoalEntry)}
+    assert {"horizon", "target_date", "target_note"} <= fields
+```
+
+**Step 2: Run → fail** (fields missing).
+
+**Step 3: Implement**
+- In `schema.py` `ensure_schema()`, after the goals `CREATE TABLE`, add:
+  ```sql
+  ALTER TABLE goals ADD COLUMN IF NOT EXISTS horizon TEXT NOT NULL DEFAULT 'long_term';
+  ALTER TABLE goals ADD COLUMN IF NOT EXISTS target_date DATE;
+  ALTER TABLE goals ADD COLUMN IF NOT EXISTS target_note TEXT;
+  ```
+  (Add a `CHECK (horizon IN ('short_term','long_term'))` via a guarded
+  `ADD CONSTRAINT ... IF NOT EXISTS` pattern, or validate in code if the PG
+  version lacks `IF NOT EXISTS` on constraints.)
+- `GoalEntry`: add `horizon: str`, `target_date: date | None`, `target_note: str | None`.
+- `list_goals`: SELECT the new columns and populate them; keep ordering.
+
+**Step 4: Run → pass.** **Step 5: Commit** `git commit -m "feat(goals): horizon + target columns on goals"`
+
+---
+
 ### Task B1: `create_goal`
 
 **Files:** Modify `backend/app/user_model/goals.py`; export from `app/user_model/__init__.py`. Test: `backend/tests/test_user_model.py`.
@@ -114,7 +154,10 @@ def _slugify_goal(title: str) -> str:
     slug = re.sub(r"-+", "-", slug)
     return slug[:60].strip("-") or "goal"
 
-def create_goal(title: str, body: str = "", status: GoalStatus = "tentative") -> GoalEntry:
+def create_goal(
+    title: str, body: str = "", status: GoalStatus = "tentative",
+    horizon: str = "long_term", target_date=None, target_note: str | None = None,
+) -> GoalEntry:
     base = _slugify_goal(title)
     with transaction() as conn:
         with conn.cursor() as cur:
@@ -129,15 +172,19 @@ def create_goal(title: str, body: str = "", status: GoalStatus = "tentative") ->
             position = cur.fetchone()["p"]
             cur.execute(
                 """
-                INSERT INTO goals (goal_id, title, body, status, position)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING goal_id, title, body, status
+                INSERT INTO goals (goal_id, title, body, status, position, horizon, target_date, target_note)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING goal_id, title, body, status, horizon, target_date, target_note
                 """,
-                (goal_id, title, body, status, position),
+                (goal_id, title, body, status, position, horizon, target_date, target_note),
             )
             row = cur.fetchone()
-    return GoalEntry(goal_id=row["goal_id"], title=row["title"], body=row["body"] or "", status=row["status"])
+    return GoalEntry(goal_id=row["goal_id"], title=row["title"], body=row["body"] or "",
+                     status=row["status"], horizon=row["horizon"],
+                     target_date=row["target_date"], target_note=row["target_note"])
 ```
+
+Add a test asserting `create_goal(title="...", horizon="short_term", target_note="6 months")` round-trips `horizon` and `target_note`, and that the default horizon is `long_term`. (Update the `GoalEntry(...)` constructions in B2/`list_goals`/`promote_goal` to pass the new fields too.)
 
 Add `create_goal` to `app/user_model/__init__.py` exports.
 
@@ -180,10 +227,14 @@ def test_update_missing_goal_raises() -> None:
 **Step 3: Implement**
 
 ```python
-def update_goal(goal_id: str, *, title: str | None = None, body: str | None = None) -> GoalEntry:
+def update_goal(goal_id: str, *, title=None, body=None, horizon=None,
+                target_date=None, target_note=None) -> GoalEntry:
     sets, params = [], []
     if title is not None: sets.append("title = %s"); params.append(title)
     if body is not None: sets.append("body = %s"); params.append(body)
+    if horizon is not None: sets.append("horizon = %s"); params.append(horizon)
+    if target_date is not None: sets.append("target_date = %s"); params.append(target_date)
+    if target_note is not None: sets.append("target_note = %s"); params.append(target_note)
     if not sets:
         # nothing to change; return current
         for g in list_goals():
@@ -193,10 +244,11 @@ def update_goal(goal_id: str, *, title: str | None = None, body: str | None = No
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(f"UPDATE goals SET {', '.join(sets)}, updated_at = now() WHERE goal_id = %s "
-                        "RETURNING goal_id, title, body, status", params)
+                        "RETURNING goal_id, title, body, status, horizon, target_date, target_note", params)
             row = cur.fetchone()
             if row is None: raise ValueError(f"Unknown goal: {goal_id}")
-    return GoalEntry(goal_id=row["goal_id"], title=row["title"], body=row["body"] or "", status=row["status"])
+    return GoalEntry(goal_id=row["goal_id"], title=row["title"], body=row["body"] or "", status=row["status"],
+                     horizon=row["horizon"], target_date=row["target_date"], target_note=row["target_note"])
 
 def delete_goal(goal_id: str) -> None:
     with transaction() as conn:
@@ -238,7 +290,10 @@ def test_goal_crud_http() -> None:
 
 **Step 2: Run → fail** (routes 404/405).
 
-**Step 3: Implement** — add Pydantic models (`GoalCreate{title, body=""}`, `GoalUpdate{title?, body?}`, `GoalItem` mirroring `GoalEntry`) and routes:
+**Step 3: Implement** — add Pydantic models including the horizon/target fields:
+`GoalCreate{title, body="", horizon="long_term", target_date: date | None = None, target_note: str | None = None}`,
+`GoalUpdate{title?, body?, horizon?, target_date?, target_note?}`,
+`GoalItem` mirroring `GoalEntry` (incl. horizon/target_date/target_note). Routes:
 - `GET /user-model/goals` → `list_goals()`
 - `POST /user-model/goals` (201) → `create_goal(...)`
 - `PATCH /user-model/goals/{goal_id}` → `update_goal(...)`, `ValueError`→404
@@ -272,7 +327,7 @@ def test_explicit_add_goal_detected() -> None:
 **Step 3: Implement**
 - `DetectedProposal.module_id`: add `"goals"` to the Literal.
 - `_detect_explicit`: add pattern `(r"(?:add|make|set)\s+(?:this\s+)?(?:as\s+)?(?:a\s+)?goals?\s*:?\s*(.+)", "goals")`.
-- `_proposal_for_module`: add a `goals` branch → `DetectedProposal(module_id="goals", item_type="goal", title=_derive_title(text), description=text, payload={}, confidence_bucket=bucket, explicit_request=explicit)`.
+- `_proposal_for_module`: add a `goals` branch → `DetectedProposal(module_id="goals", item_type="goal", title=_derive_title(text), description=text, payload={"horizon": "long_term"}, confidence_bucket=bucket, explicit_request=explicit)`.
 - `_detect_suggested_with_llm`: add `goals` to the module list + prompt ("goals: a durable aspiration or direction the person wants, distinct from an actionable task"). Add `"goals"` to the allowed `module_id` set.
 - Schema: add `ALTER TABLE capture_proposals ADD COLUMN IF NOT EXISTS created_goal_id TEXT;` in `schema.py` `ensure_schema()`.
 
@@ -307,7 +362,8 @@ def test_confirming_goal_proposal_creates_tentative_goal() -> None:
 
 **Step 3: Implement**
 - `ConfirmCaptureProposalResponse`: make `life_item_id: UUID | None = None`; add `goal_id: str | None = None`.
-- `_create_from_proposal`: add `goals` branch → `g = create_goal(title=proposal["title"], body=proposal["description"], status="tentative"); return {"goal_id": g.goal_id}`.
+- `_create_from_proposal`: add `goals` branch → `g = create_goal(title=proposal["title"], body=proposal["description"], status="tentative", horizon=proposal["payload"].get("horizon", "long_term"), target_note=proposal["payload"].get("target_note")); return {"goal_id": g.goal_id}`.
+- **Horizon classification:** in `_detect_suggested_with_llm`, when `module_id == "goals"`, also return `horizon` (`short_term` if the statement implies a near-term deadline/≤3 months, else `long_term`; default `long_term`) and an optional `target_note`; store them in the proposal `payload`. The deterministic fallback `_proposal_for_module("goals", ...)` sets `payload={"horizon": "long_term"}`.
 - `confirm_capture_proposal`: when `module_id == "goals"`, persist `created_goal_id` (instead of `created_life_item_id`); idempotency check uses `created_goal_id`; build response with `goal_id`. For non-goals, unchanged (`life_item_id`).
 
 **Step 4: Run → pass.** Run full `pytest tests/test_chat_actions.py -v`. **Step 5: Commit** `git commit -m "feat(goals): confirm goal proposals into tentative goals"`
@@ -434,7 +490,7 @@ def delete_log_endpoint(log_id: UUID) -> Response:
 Modify `frontend/src/lib/api.ts`: `listGoals`, `createGoal`, `updateGoal`, `promoteGoal`, `deleteGoal`; `deleteLog`, `archiveLog`; and types. Handle `ConfirmCaptureProposalResponse.goal_id` (now optional `life_item_id`). Verify `npx tsc --noEmit`. Commit.
 
 ### Task G2: Goals page
-Create `frontend/src/pages/GoalsPage.tsx` + route + sidebar entry: lists Active + Tentative; add (title + reason), edit, promote, delete; optimistic updates. Verify by creating/promoting/deleting a goal. Commit.
+Create `frontend/src/pages/GoalsPage.tsx` + route + sidebar entry: lists Active + Tentative; add (title + reason + short/long **horizon** toggle + optional **target date** + optional **rough-timeframe note**), edit, promote, delete; optimistic updates; may group/sort by horizon. Verify by creating a short-term and a long-term goal, promoting, deleting. Commit.
 
 ### Task G3: Log row actions
 Modify `frontend/src/pages/LogsPage.tsx`: per-row delete (confirm) + archive actions calling the new client fns; remove the stuck `"It's going good"` entry to confirm. Commit.
