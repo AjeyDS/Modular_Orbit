@@ -70,6 +70,17 @@ def test_persona_prompt_unknown_preset_falls_back_to_warm() -> None:
     assert "warm" in prompt.lower() or "encourag" in prompt.lower()
 
 
+def test_typed_goodbye_ends_session(tmp_path) -> None:
+    from app.lifecycle import get_life_item
+    from app.modules.companion import get_or_create_companion_session, respond_to_user_turn
+
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+    reply = respond_to_user_turn("talk to you later")
+    assert reply["kind"] == "ended"
+    assert get_life_item(session["id"])["payload"]["session_state"] == "closed"
+
+
 def test_ending_closes_session_and_opens_fresh_one(tmp_path) -> None:
     from app.lifecycle import get_life_item
     from app.modules.companion import (

@@ -58,6 +58,24 @@ _FILLER = {
     "yep", "nope", "cool", "great", "lol", "haha",
 }
 
+_END_MARKERS = (
+    "bye",
+    "goodbye",
+    "talk to you later",
+    "talk later",
+    "that's all",
+    "thats all",
+    "gotta go",
+    "see you",
+)
+
+
+def _is_end_intent(text: str) -> bool:
+    cleaned = text.strip().lower().rstrip("!.")
+    return cleaned in _END_MARKERS or cleaned.startswith(
+        ("bye", "talk to you later", "talk later")
+    )
+
 PERSONA_PRESETS: dict[str, str] = {
     "warm": "You are warm, encouraging, and gentle. Celebrate small wins briefly.",
     "coach": "You are a focused coach. You encourage but also gently push for clarity and follow-through.",
@@ -139,7 +157,9 @@ def is_meaningful_reply(text: str) -> bool:
         return len(cleaned.split()) >= 3
 
 
-def record_user_turn(session_id: UUID | str, text: str) -> None:
+def record_user_turn(
+    session_id: UUID | str, text: str, *, capture: bool = True
+) -> None:
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -152,7 +172,7 @@ def record_user_turn(session_id: UUID | str, text: str) -> None:
             )
             message_id = cur.fetchone()["id"]
 
-    if not is_meaningful_reply(text):
+    if not capture or not is_meaningful_reply(text):
         return
 
     result = create_life_item(
@@ -315,6 +335,34 @@ def generate_companion_question() -> dict[str, Any]:
 
 def respond_to_user_turn(text: str) -> dict[str, Any]:
     session = get_or_create_companion_session()
+    if _is_end_intent(text):
+        record_user_turn(session["id"], text, capture=False)
+        settings = _companion_settings()
+        persona = build_persona_prompt(
+            preset=str(settings.get("companion_persona_preset", "warm")),
+            override=str(settings.get("companion_persona_override", "")),
+        )
+        try:
+            signoff = generate_text(
+                "The person is ending the conversation. Reply with one brief warm sign-off.",
+                system=persona,
+                temperature=0.4,
+                max_output_tokens=80,
+            )
+        except (LLMUnavailable, Exception):
+            signoff = "Talk soon — take care."
+        with transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO companion_messages (session_id, role, content, meta)
+                    VALUES (%s, 'assistant', %s, %s)
+                    """,
+                    (session["id"], signoff, Jsonb({"kind": "signoff"})),
+                )
+        end_companion_session()
+        return {"kind": "ended", "message": signoff}
+
     outstanding = _has_outstanding_question(session["id"])
     record_user_turn(session["id"], text)
 
