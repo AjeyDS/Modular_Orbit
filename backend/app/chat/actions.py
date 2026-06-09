@@ -31,6 +31,20 @@ _BROAD_MARKERS = (
     "my life", "everything", "overall", "in general", "priorities",
     "where should i", "how am i doing",
 )
+_FOCUS_MARKERS = (
+    "focus on",
+    "what should i do",
+    "what should i focus",
+    "prioritize",
+    "priorities",
+    "plan my day",
+    "what now",
+    "where should i start",
+    "how should i spend",
+    "what's important",
+    "whats important",
+)
+_ACTIONABLE_MODULES = frozenset({"tasks", "plans", "routines", "goals"})
 QUERYABLE_MODULES = frozenset({"tasks", "plans", "goals", "routines"})
 
 
@@ -1044,7 +1058,8 @@ def _route_and_classify(message: str) -> RouteDecision:
         ]
         if not modules:
             modules = _modules_fallback(message)
-        return RouteDecision(
+        return _finalize_route_decision(
+            message,
             breadth=breadth,
             buckets=buckets,
             expansion_terms=terms,
@@ -1053,13 +1068,40 @@ def _route_and_classify(message: str) -> RouteDecision:
         )
     except (LLMUnavailable, Exception):
         breadth = _breadth_fallback(message)
-        return RouteDecision(
+        return _finalize_route_decision(
+            message,
             breadth=breadth,
             buckets=_select_buckets_fallback(message, catalog),
             expansion_terms=[],
             modules=_modules_fallback(message),
             rationale="lexical fallback",
         )
+
+
+def _is_focus_query(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in _FOCUS_MARKERS)
+
+
+def _finalize_route_decision(
+    message: str,
+    *,
+    breadth: str,
+    buckets: list[str],
+    expansion_terms: list[str],
+    modules: list[str],
+    rationale: str,
+) -> RouteDecision:
+    if _is_focus_query(message):
+        modules = sorted(set(modules) | _ACTIONABLE_MODULES)
+        breadth = "broad"
+    return RouteDecision(
+        breadth=breadth,
+        buckets=buckets,
+        expansion_terms=expansion_terms,
+        modules=modules,
+        rationale=rationale,
+    )
 
 
 def _breadth_fallback(message: str) -> str:

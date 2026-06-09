@@ -119,6 +119,22 @@ def test_router_fallback_selects_buckets_and_breadth(tmp_path) -> None:
     assert narrow.expansion_terms == []
 
 
+def test_is_focus_query() -> None:
+    from app.chat.actions import _is_focus_query
+
+    assert _is_focus_query("what should I focus on today?") is True
+    assert _is_focus_query("how should I prioritize my week?") is True
+    assert _is_focus_query("when is my dentist appointment?") is False
+
+
+def test_focus_query_forces_actionable_modules() -> None:
+    from app.chat.actions import _route_and_classify
+
+    decision = _route_and_classify("what should I focus on today?")
+    assert {"tasks", "plans", "routines", "goals"} <= set(decision.modules)
+    assert decision.breadth == "broad"
+
+
 def test_router_selects_modules_via_lexical_fallback() -> None:
     from app.chat.actions import _route_and_classify, QUERYABLE_MODULES
 
