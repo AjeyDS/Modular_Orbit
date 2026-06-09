@@ -727,7 +727,12 @@ def _chat_system_prompt(mode: ChatMode) -> str:
         return f"{base} This is Fast Chat: answer directly from retrieved knowledge; minimal assumptions."
     return (
         f"{base} This is Understanding Chat: use the selected Story Buckets to frame and personalize, "
-        "but answer the user's actual question; do not wander."
+        "but answer the user's actual question; do not wander. "
+        "If the user asks what to focus on or how to prioritize, use the Structured data "
+        "to RANK concrete items (tasks, plans, routines) by urgency (soonest or overdue "
+        "due dates first), then priority, then alignment to active goals. Recommend an "
+        "ordered short list (top 3), each with a one-line reason, leading with the single "
+        "most important. Decide; don't just describe."
     )
 
 
