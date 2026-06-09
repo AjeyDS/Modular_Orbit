@@ -150,6 +150,78 @@ def create_goal(
     )
 
 
+def _row_to_goal_entry(row: dict) -> GoalEntry:
+    return GoalEntry(
+        goal_id=row["goal_id"],
+        title=row["title"],
+        body=row["body"] or "",
+        status=row["status"],
+        horizon=row["horizon"],
+        target_date=row["target_date"],
+        target_note=row["target_note"],
+    )
+
+
+def update_goal(
+    goal_id: str,
+    *,
+    title: str | None = None,
+    body: str | None = None,
+    horizon: str | None = None,
+    target_date: date | None = None,
+    target_note: str | None = None,
+) -> GoalEntry:
+    sets: list[str] = []
+    params: list[object] = []
+    if title is not None:
+        sets.append("title = %s")
+        params.append(title)
+    if body is not None:
+        sets.append("body = %s")
+        params.append(body)
+    if horizon is not None:
+        sets.append("horizon = %s")
+        params.append(horizon)
+    if target_date is not None:
+        sets.append("target_date = %s")
+        params.append(target_date)
+    if target_note is not None:
+        sets.append("target_note = %s")
+        params.append(target_note)
+    if not sets:
+        for goal in list_goals():
+            if goal.goal_id == goal_id:
+                return goal
+        raise ValueError(f"Unknown goal: {goal_id}")
+    params.append(goal_id)
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE goals
+                SET {", ".join(sets)}, updated_at = now()
+                WHERE goal_id = %s
+                RETURNING goal_id, title, body, status, horizon, target_date, target_note
+                """,
+                params,
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"Unknown goal: {goal_id}")
+    return _row_to_goal_entry(row)
+
+
+def delete_goal(goal_id: str) -> None:
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM goals WHERE goal_id = %s RETURNING goal_id",
+                (goal_id,),
+            )
+            if cur.fetchone() is None:
+                raise ValueError(f"Unknown goal: {goal_id}")
+
+
 def promote_goal(goal_id: str) -> GoalEntry:
     """Move a Tentative Goal into Active while preserving its goal ID."""
     with transaction() as conn:
@@ -166,15 +238,7 @@ def promote_goal(goal_id: str) -> GoalEntry:
             row = cur.fetchone()
             if row is None:
                 raise ValueError(f"Unknown goal: {goal_id}")
-            return GoalEntry(
-                goal_id=row["goal_id"],
-                title=row["title"],
-                body=row["body"] or "",
-                status=row["status"],
-                horizon=row["horizon"],
-                target_date=row["target_date"],
-                target_note=row["target_note"],
-            )
+            return _row_to_goal_entry(row)
 
 
 def _split_goal_sections_legacy(text: str) -> dict[GoalStatus, str]:

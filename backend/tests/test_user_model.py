@@ -30,6 +30,34 @@ def registry_ready() -> None:
     sync_module_registry()
 
 
+def test_update_goal_preserves_id() -> None:
+    from app.user_model.goals import create_goal, update_goal
+
+    g = create_goal(title="Learn Rust", body="x")
+    u = update_goal(g.goal_id, title="Learn Rust deeply", body="y")
+    assert u.goal_id == g.goal_id
+    assert u.title == "Learn Rust deeply"
+    assert u.body == "y"
+
+
+def test_delete_goal_removes_only_target() -> None:
+    from app.user_model.goals import create_goal, delete_goal, list_goals
+
+    a = create_goal(title="Goal A")
+    b = create_goal(title="Goal B")
+    delete_goal(a.goal_id)
+    ids = {x.goal_id for x in list_goals()}
+    assert a.goal_id not in ids
+    assert b.goal_id in ids
+
+
+def test_update_missing_goal_raises() -> None:
+    from app.user_model.goals import update_goal
+
+    with pytest.raises(ValueError):
+        update_goal("nope", title="x")
+
+
 def test_create_goal_inserts_tentative_with_stable_slug() -> None:
     from app.user_model.goals import create_goal, list_goals
 
