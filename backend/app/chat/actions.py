@@ -800,6 +800,39 @@ def _select_buckets_fallback(message: str, catalog: list[dict[str, str]] | None 
     return picked or [scored[0]["stable_key"]] if scored else []
 
 
+def _sufficiency_check(message: str, chunks: list) -> tuple[bool, str]:
+    """Return (sufficient, follow_up_query). Fallback: sufficient."""
+    if not chunks:
+        return True, ""
+    summary = "\n".join(f"- {getattr(c, 'title', '')}: {getattr(c, 'content', '')[:200]}" for c in chunks[:6])
+    try:
+        data = generate_json(
+            f'Query:\n{message}\n\nRetrieved:\n{summary}\n\n'
+            'Return JSON: {"sufficient": bool, "follow_up_query": "" }. '
+            'Only set sufficient=false if the retrieved context clearly misses '
+            'something the query explicitly asked for.',
+            system="You judge whether retrieved context answers the query. Return only JSON.",
+            temperature=0.1,
+            max_output_tokens=200,
+        )
+        sufficient = bool(data.get("sufficient", True))
+        follow_up = str(data.get("follow_up_query") or "").strip()
+        return (sufficient, "" if sufficient else follow_up)
+    except (LLMUnavailable, Exception):
+        return True, ""
+
+
+def _understanding_retrieval(message: str, decision: RouteDecision, *, limit: int = 4) -> list:
+    query = _retrieval_query(message, decision)
+    chunks = retrieve_chunks(query, limit=limit)
+    sufficient, follow_up = _sufficiency_check(message, chunks)
+    if not sufficient and follow_up:
+        extra = retrieve_chunks(follow_up, limit=limit)
+        seen = {getattr(c, "id", id(c)) for c in chunks}
+        chunks = chunks + [c for c in extra if getattr(c, "id", id(c)) not in seen]
+    return chunks
+
+
 def _retrieval_query(message: str, decision: RouteDecision) -> str:
     if decision.breadth == "broad" and decision.expansion_terms:
         return f"{message} " + " ".join(decision.expansion_terms)

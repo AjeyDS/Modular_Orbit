@@ -26,6 +26,24 @@ def _session_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
 
 
+def test_understanding_retrieval_caps_followups(tmp_path, monkeypatch) -> None:
+    _ready(tmp_path)
+    import app.chat.actions as actions
+    from app.chat.actions import _understanding_retrieval, RouteDecision
+
+    calls = {"n": 0}
+
+    def fake_retrieve(query, *, limit=4):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(actions, "retrieve_chunks", fake_retrieve)
+    monkeypatch.setattr(actions, "_sufficiency_check", lambda message, chunks: (False, "dentist friday"))
+
+    _understanding_retrieval("when is my dentist appointment", RouteDecision(breadth="narrow", buckets=["health"]))
+    assert calls["n"] <= 2
+
+
 def test_retrieval_query_does_not_dilute_narrow(tmp_path) -> None:
     _ready(tmp_path)
     from app.chat.actions import _retrieval_query, RouteDecision
