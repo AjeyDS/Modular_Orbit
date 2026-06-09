@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from app.lifecycle import create_life_item
+from app.modules.curious import _mark_session_lifecycle_not_needed
+
 PERSONA_PRESETS: dict[str, str] = {
     "warm": "You are warm, encouraging, and gentle. Celebrate small wins briefly.",
     "coach": "You are a focused coach. You encourage but also gently push for clarity and follow-through.",
@@ -23,3 +30,41 @@ def build_persona_prompt(*, preset: str, override: str) -> str:
     if override.strip():
         parts.append(f"Additional instructions from the person: {override.strip()}")
     return " ".join(parts)
+
+
+def get_or_create_companion_session() -> dict[str, Any]:
+    from app.db import transaction
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT li.*
+                FROM life_items li
+                JOIN module_instances mi ON mi.id = li.module_instance_id
+                JOIN modules m ON m.id = mi.module_id
+                WHERE m.id = 'curious'
+                    AND li.item_type = 'curious_session'
+                    AND li.payload ->> 'session_type' = 'companion'
+                ORDER BY li.created_at ASC
+                LIMIT 1
+                """
+            )
+            existing = cur.fetchone()
+            if existing is not None:
+                return dict(existing)
+
+    result = create_life_item(
+        module_id="curious",
+        item_type="curious_session",
+        title="Companion Session",
+        description="Ongoing Curious companion conversation session.",
+        payload={
+            "session_type": "companion",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        },
+        source={"kind": "companion_session"},
+        request_id="companion-session",
+    )
+    _mark_session_lifecycle_not_needed(result.item["id"])
+    return result.item
