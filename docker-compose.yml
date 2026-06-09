@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: modular_orbit
+      POSTGRES_USER: orbit
+      POSTGRES_PASSWORD: orbit
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orbit -d modular_orbit"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: ../.env
+        required: false
+      - path: ./.env
+        required: false
+    command: >
+      sh -c '
+        until python -m app.db.bootstrap; do
+          echo "Database bootstrap failed; retrying in 2s..."
+          sleep 2
+        done
+        python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+      '
+    environment:
+      DATABASE_URL: postgresql://orbit:orbit@postgres:5432/modular_orbit
+      ENVIRONMENT: docker
+      LLM_MODE: ${LLM_MODE:-real}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.5-flash-lite}
+      GEMINI_JSON_MODEL: ${GEMINI_JSON_MODEL:-gemini-2.5-flash-lite}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-models/gemini-embedding-001}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-3072}
+      USER_MODEL_DIR: /app/user_model
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./user_model:/app/user_model
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
