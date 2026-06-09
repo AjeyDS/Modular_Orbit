@@ -10,6 +10,7 @@ import {
   type ChatMessageItem,
   type ChatMode,
 } from '../lib/api'
+import { Markdown } from '../components/Markdown'
 import { pageContentClass } from '../layout/pageShell'
 import { chatSessionChangedEvent, newChatEvent } from '../layout/Sidebar'
 
@@ -353,7 +354,11 @@ function ConversationView({
                   : 'rounded-2xl rounded-bl-sm bg-gray-50 text-gray-800 dark:bg-gray-800/30 dark:text-gray-200'
             }`}
           >
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            {message.role === 'assistant' ? (
+              <Markdown>{message.content}</Markdown>
+            ) : (
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            )}
             {'suggestions' in message && message.suggestions && message.suggestions.length > 0 && (
               <div className="mt-4 grid gap-2">
                 {message.suggestions.map((proposal) => (
@@ -402,7 +407,7 @@ function ConversationView({
               <p className="mb-2 text-[12px] font-medium text-violet-600 dark:text-violet-300">{streamStatus}</p>
             )}
             {streamingContent ? (
-              <p className="whitespace-pre-wrap">{streamingContent}</p>
+              <Markdown>{streamingContent}</Markdown>
             ) : (
               <div className="flex h-5 items-center space-x-1.5">
                 <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400 dark:bg-gray-500" />
