@@ -19,7 +19,7 @@ from app.rag import retrieve_chunks
 from app.user_model import list_goals
 
 
-ChatMode = Literal["free", "context", "deep", "decision"]
+ChatMode = Literal["fast", "understanding"]
 ConfidenceBucket = Literal["low", "medium", "high"]
 
 CONFIDENCE_SCORES: dict[ConfidenceBucket, float] = {
@@ -31,7 +31,7 @@ CONFIDENCE_SCORES: dict[ConfidenceBucket, float] = {
 
 class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    mode: ChatMode = "context"
+    mode: ChatMode = "understanding"
     message: str = Field(min_length=1)
 
 
@@ -453,13 +453,9 @@ def _row_to_preview(row: dict[str, Any], retrieval_policy: dict[str, Any]) -> Ca
 
 def _mode_answer(mode: ChatMode, has_suggestion: bool) -> str:
     suffix = " I found a possible item to preview." if has_suggestion else ""
-    if mode == "free":
-        return f"LLM is unavailable, so I can only use minimal structured context right now.{suffix}"
-    if mode == "deep":
-        return f"LLM is unavailable, so Deep Chat cannot synthesize broader retrieved context right now.{suffix}"
-    if mode == "decision":
-        return f"LLM is unavailable, so Decision Mode cannot generate options and tradeoffs right now.{suffix}"
-    return f"LLM is unavailable, so I can only report that context retrieval is available for this turn.{suffix}"
+    if mode == "fast":
+        return f"LLM is unavailable, so Fast Chat can only report retrieved knowledge right now.{suffix}"
+    return f"LLM is unavailable, so Understanding Chat can only report routed context right now.{suffix}"
 
 
 def _generate_chat_answer(
@@ -493,8 +489,8 @@ the user can save the preview; do not pressure them.
         return generate_text(
             prompt,
             system=system,
-            temperature=0.45 if request.mode != "decision" else 0.55,
-            max_output_tokens=1300 if request.mode != "deep" else 2200,
+            temperature=0.45,
+            max_output_tokens=2200 if request.mode == "understanding" else 1300,
         )
     except (LLMUnavailable, Exception):
         return _fallback_context_answer(request.mode, context, bool(suggestions))
@@ -506,21 +502,17 @@ def _chat_system_prompt(mode: ChatMode) -> str:
         "and useful. Use the provided Story Buckets, Goals, module data, Connections, "
         "and Knowledge Chunks only as context; do not invent private facts."
     )
-    if mode == "free":
-        return f"{base} This is Free Chat: answer conversationally with minimal assumptions."
-    if mode == "deep":
-        return f"{base} This is Deep Chat: synthesize carefully across the broader retrieved context."
-    if mode == "decision":
-        return (
-            f"{base} This is Decision Mode: produce clear options, tradeoffs, and goal-alignment notes. "
-            "Prefer multiple concrete options over one vague recommendation."
-        )
-    return f"{base} This is Context Chat: combine user-model context, module tools, and focused retrieval."
+    if mode == "fast":
+        return f"{base} This is Fast Chat: answer directly from retrieved knowledge; minimal assumptions."
+    return (
+        f"{base} This is Understanding Chat: use the selected Story Buckets to frame and personalize, "
+        "but answer the user's actual question; do not wander."
+    )
 
 
 def _fallback_context_answer(mode: ChatMode, context: str, has_suggestion: bool) -> str:
     suffix = "\n\nI also found a possible item to preview." if has_suggestion else ""
-    if mode == "free":
+    if mode == "fast":
         return _mode_answer(mode, has_suggestion)
     if not context.strip() or context == "No Orbit context found yet.":
         return f"LLM generation is unavailable, and I could not find relevant Orbit context for this turn.{suffix}"
@@ -547,11 +539,8 @@ def _context_excerpts(context: str, *, limit: int = 4) -> list[str]:
 
 
 def _build_answer_context(mode: ChatMode, message: str) -> str:
-    if mode == "free":
-        return "Free Chat intentionally uses no durable user-model context unless explicitly provided in the turn."
-
     sections = [
-        _chunk_context(message, limit=8 if mode == "deep" else 4),
+        _chunk_context(message, limit=8 if mode == "understanding" else 4),
         _connection_context(message),
         _story_bucket_context(),
         _goal_context(),

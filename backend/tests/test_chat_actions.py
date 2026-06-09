@@ -26,17 +26,25 @@ def _session_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
 
 
+def test_chat_mode_accepts_two_modes(tmp_path) -> None:
+    _ready(tmp_path)
+    fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))
+    understanding = respond_to_chat(ChatRequest(session_id=_session_id("u"), mode="understanding", message="hi there orbit"))
+    assert fast.mode == "fast"
+    assert understanding.mode == "understanding"
+
+
 def test_explicit_task_request_creates_preview(tmp_path) -> None:
     _ready(tmp_path)
     response = respond_to_chat(
         ChatRequest(
             session_id=_session_id("explicit-task"),
-            mode="context",
+            mode="understanding",
             message="add this to tasks: Build the suggested chat action preview",
         )
     )
 
-    assert response.mode == "context"
+    assert response.mode == "understanding"
     assert len(response.suggestions) == 1
     suggestion = response.suggestions[0]
     assert suggestion.module_id == "tasks"
@@ -122,7 +130,7 @@ def test_standard_chat_fallback_surfaces_retrieved_document_context(tmp_path) ->
     response = respond_to_chat(
         ChatRequest(
             session_id=_session_id("resume-context"),
-            mode="context",
+            mode="understanding",
             message="What does my resume say about RAG?",
         )
     )
@@ -146,7 +154,7 @@ def test_context_chat_prioritizes_rag_chunks_over_recent_module_data(tmp_path) -
         review=False,
     )
 
-    context = _build_answer_context("context", "What does my resume say about RAG?")
+    context = _build_answer_context("understanding", "What does my resume say about RAG?")
 
     assert "Knowledge Chunks:" in context
     assert "Selected module data:" in context
@@ -242,13 +250,13 @@ def test_chat_api_respond_and_confirm(tmp_path) -> None:
         "/chat/respond",
         json={
             "session_id": _session_id("api-chat"),
-            "mode": "free",
+            "mode": "fast",
             "message": "log this: Today I learned that Orbit chat actions need previews.",
         },
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["mode"] == "free"
+    assert body["mode"] == "fast"
     assert body["suggestions"][0]["module_id"] == "logs"
 
     confirm_response = client.post(
