@@ -201,6 +201,14 @@ def test_collect_sources_fast_mode_chunks_only() -> None:
     assert all(r.kind in {"document", "item"} for r in refs)
 
 
+def test_chat_response_includes_sources(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.chat.actions import ChatRequest, respond_to_chat
+
+    resp = respond_to_chat(ChatRequest(session_id=_session_id("sources"), mode="understanding", message="hello"))
+    assert isinstance(resp.sources, list)
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))

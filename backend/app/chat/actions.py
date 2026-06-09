@@ -86,6 +86,7 @@ class ChatResponse(BaseModel):
     mode: ChatMode
     answer: str
     suggestions: list[CaptureProposalPreview]
+    sources: list[SourceRef] = []
 
 
 class ConfirmCaptureProposalRequest(BaseModel):
@@ -139,7 +140,7 @@ def respond_to_chat(request: ChatRequest) -> ChatResponse:
         if _should_surface(request.session_id, proposal)
     ]
 
-    answer = _generate_chat_answer(request, suggestions)
+    answer, sources = _generate_chat_answer(request, suggestions)
 
     suggestions_json: list[dict[str, Any]] | None
     if suggestions:
@@ -160,6 +161,7 @@ def respond_to_chat(request: ChatRequest) -> ChatResponse:
         mode=request.mode,
         answer=answer,
         suggestions=suggestions,
+        sources=sources,
     )
 
 
@@ -192,6 +194,8 @@ def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
         if _should_surface(request.session_id, proposal)
     ]
 
+    chunks: list = []
+    decision: RouteDecision | None = None
     if request.mode == "understanding":
         yield {"stage": "routing"}
         decision = _route_and_classify(request.message)
@@ -207,7 +211,7 @@ def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
         context = _build_understanding_context(request.message, decision, chunks)
     else:
         yield {"stage": "retrieving"}
-        context = _build_answer_context(request.mode, request.message)
+        context, chunks, decision = _prepare_chat_context(request.mode, request.message)
 
     yield {"stage": "writing"}
     system = _chat_system_prompt(request.mode)
@@ -242,9 +246,11 @@ def respond_to_chat_stream(request: ChatRequest) -> Iterator[dict[str, Any]]:
             suggestions=suggestions_json,
         )
 
+    sources = _collect_sources(chunks, decision)
     yield {
         "stage": "done",
         "suggestions": suggestions_json or [],
+        "sources": [source.model_dump() for source in sources],
     }
 
 
@@ -675,19 +681,21 @@ the user can save the preview; do not pressure them.
 def _generate_chat_answer(
     request: ChatRequest,
     suggestions: list[CaptureProposalPreview],
-) -> str:
-    context = _build_answer_context(request.mode, request.message)
+) -> tuple[str, list[SourceRef]]:
+    context, chunks, decision = _prepare_chat_context(request.mode, request.message)
+    sources = _collect_sources(chunks, decision)
     system = _chat_system_prompt(request.mode)
     prompt = _answer_prompt(request, context, suggestions)
     try:
-        return generate_text(
+        answer = generate_text(
             prompt,
             system=system,
             temperature=0.45,
             max_output_tokens=2200 if request.mode == "understanding" else 1300,
         )
     except (LLMUnavailable, Exception):
-        return _fallback_context_answer(request.mode, context, bool(suggestions))
+        answer = _fallback_context_answer(request.mode, context, bool(suggestions))
+    return answer, sources
 
 
 def _chat_system_prompt(mode: ChatMode) -> str:
@@ -833,14 +841,24 @@ def _structured_context(modules: list[str]) -> str:
     return "Structured data:\n" + "\n\n".join(blocks)
 
 
-def _build_answer_context(mode: ChatMode, message: str) -> str:
+def _prepare_chat_context(
+    mode: ChatMode, message: str
+) -> tuple[str, list, RouteDecision | None]:
     if mode == "fast":
-        sections = [_chunk_context(message, limit=4), _connection_context(message), _goal_context()]
-        return "\n\n".join(s for s in sections if s.strip()) or "No Orbit context found yet."
+        chunks = retrieve_chunks(message, limit=4)
+        sections = [_chunks_to_context(chunks), _connection_context(message), _goal_context()]
+        context = "\n\n".join(s for s in sections if s.strip()) or "No Orbit context found yet."
+        return context, chunks, None
 
     decision = _route_and_classify(message)
     chunks = _understanding_retrieval(message, decision, limit=8 if decision.breadth == "broad" else 4)
-    return _build_understanding_context(message, decision, chunks)
+    context = _build_understanding_context(message, decision, chunks)
+    return context, chunks, decision
+
+
+def _build_answer_context(mode: ChatMode, message: str) -> str:
+    context, _, _ = _prepare_chat_context(mode, message)
+    return context
 
 
 def _build_understanding_context(

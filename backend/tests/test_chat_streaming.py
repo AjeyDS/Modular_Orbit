@@ -63,6 +63,16 @@ def test_stream_emits_checking_state_for_structured_query(tmp_path) -> None:
     assert stages.index("retrieving") > stages.index("checking_state")
 
 
+def test_stream_done_includes_sources(tmp_path) -> None:
+    _ready(tmp_path)
+    events = list(
+        respond_to_chat_stream(
+            ChatRequest(session_id=f"s1-{uuid4().hex}", mode="fast", message="hi")
+        )
+    )
+    assert "sources" in events[-1]
+
+
 def test_stream_skips_checking_state_for_non_structured_query(tmp_path) -> None:
     _ready(tmp_path)
     events = list(
