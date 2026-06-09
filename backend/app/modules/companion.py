@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+from psycopg.types.json import Jsonb
+
+from app.db import transaction
 from app.lifecycle import create_life_item
 from app.llm import LLMUnavailable, generate_json
 from app.modules.curious import _mark_session_lifecycle_not_needed
@@ -39,8 +42,6 @@ def build_persona_prompt(*, preset: str, override: str) -> str:
 
 
 def get_or_create_companion_session() -> dict[str, Any]:
-    from app.db import transaction
-
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -94,3 +95,62 @@ def is_meaningful_reply(text: str) -> bool:
         if cleaned in _FILLER:
             return False
         return len(cleaned.split()) >= 3
+
+
+def record_user_turn(session_id: UUID | str, text: str) -> None:
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO companion_messages (session_id, role, content)
+                VALUES (%s, 'user', %s)
+                RETURNING id
+                """,
+                (session_id, text),
+            )
+            message_id = cur.fetchone()["id"]
+
+    if not is_meaningful_reply(text):
+        return
+
+    result = create_life_item(
+        module_id="curious",
+        item_type="curious_capture",
+        title=_derive_title(text),
+        description=text,
+        payload={"text": text, "session_id": str(session_id)},
+        source={"kind": "companion_capture", "session_id": str(session_id)},
+        request_id=f"companion-capture-{message_id}",
+    )
+    capture_id = result.item["id"]
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO knowledge_chunks (life_item_id, content, source_type, metadata)
+                VALUES (%s, %s, 'companion_capture', %s)
+                """,
+                (
+                    capture_id,
+                    text,
+                    Jsonb({"session_id": str(session_id), "message_id": str(message_id)}),
+                ),
+            )
+            cur.execute(
+                """
+                UPDATE life_items
+                SET connection_status = 'complete',
+                    chunk_status = 'complete',
+                    bucket_update_status = 'pending',
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (capture_id,),
+            )
+
+
+def _derive_title(text: str) -> str:
+    title = " ".join(text.strip().split())
+    if len(title) <= 80:
+        return title
+    return f"{title[:77].rstrip()}..."
