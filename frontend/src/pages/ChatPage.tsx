@@ -5,6 +5,7 @@ import {
   confirmCaptureProposal,
   fetchChatMessages,
   respondToChat,
+  streamChat,
   type CaptureProposalPreview,
   type ChatMessageItem,
   type ChatMode,
@@ -29,6 +30,13 @@ const prompts = [
 
 const USER_NAME = 'Ajey'
 
+const STAGE_LABELS: Record<string, string> = {
+  routing: 'Reading your story',
+  retrieving: 'Searching your knowledge',
+  reading_story: 'Pulling it together',
+  writing: 'Writing',
+}
+
 function greetingFor(hour: number) {
   if (hour < 5) return `Late night, ${USER_NAME}`
   if (hour < 12) return `Good morning, ${USER_NAME}`
@@ -48,6 +56,8 @@ export default function ChatPage() {
   const [hydrating, setHydrating] = useState(false)
   const [persistedRemotely, setPersistedRemotely] = useState(false)
   const [acceptingProposal, setAcceptingProposal] = useState<string | null>(null)
+  const [streamStatus, setStreamStatus] = useState('')
+  const [streamingContent, setStreamingContent] = useState('')
   const greeting = useMemo(() => greetingFor(new Date().getHours()), [])
 
   const understandingMode = mode === 'understanding'
@@ -105,15 +115,33 @@ export default function ChatPage() {
     const wasNewSession = !persistedRemotely
     setDraft('')
     setSending(true)
+    setStreamStatus('')
+    setStreamingContent('')
     setMessages((current) => [...current, { role: 'user', content: message }])
+    let answer = ''
+    let suggestions: CaptureProposalPreview[] = []
     try {
-      const response = await respondToChat({ session_id: sessionId, mode, message })
+      await streamChat(
+        { session_id: sessionId, mode, message },
+        {
+          onStage: (stage) => {
+            setStreamStatus(STAGE_LABELS[stage] ?? stage)
+          },
+          onAnswerDelta: (delta) => {
+            answer += delta
+            setStreamingContent((current) => current + delta)
+          },
+          onDone: (doneSuggestions) => {
+            suggestions = doneSuggestions
+          },
+        },
+      )
       setMessages((current) => [
         ...current,
         {
           role: 'assistant',
-          content: response.answer,
-          suggestions: response.suggestions,
+          content: answer,
+          suggestions,
         },
       ])
       setPersistedRemotely(true)
@@ -122,15 +150,34 @@ export default function ChatPage() {
       }
       window.dispatchEvent(new CustomEvent(chatSessionChangedEvent))
     } catch (err) {
-      setMessages((current) => [
-        ...current,
-        {
-          role: 'system',
-          content: err instanceof Error ? err.message : 'Chat failed.',
-        },
-      ])
+      try {
+        const response = await respondToChat({ session_id: sessionId, mode, message })
+        setMessages((current) => [
+          ...current,
+          {
+            role: 'assistant',
+            content: response.answer,
+            suggestions: response.suggestions,
+          },
+        ])
+        setPersistedRemotely(true)
+        if (wasNewSession) {
+          setSearchParams({ session: sessionId }, { replace: true })
+        }
+        window.dispatchEvent(new CustomEvent(chatSessionChangedEvent))
+      } catch (fallbackErr) {
+        setMessages((current) => [
+          ...current,
+          {
+            role: 'system',
+            content: fallbackErr instanceof Error ? fallbackErr.message : 'Chat failed.',
+          },
+        ])
+      }
     } finally {
       setSending(false)
+      setStreamStatus('')
+      setStreamingContent('')
     }
   }
 
@@ -188,6 +235,8 @@ export default function ChatPage() {
           <ConversationView
             messages={messages}
             sending={sending}
+            streamStatus={streamStatus}
+            streamingContent={streamingContent}
             acceptingProposal={acceptingProposal}
             onAccept={(p) => void acceptSuggestion(p)}
           />
@@ -269,18 +318,22 @@ function EmptyState({
 function ConversationView({
   messages,
   sending,
+  streamStatus,
+  streamingContent,
   acceptingProposal,
   onAccept,
 }: {
   messages: ChatMessage[]
   sending: boolean
+  streamStatus: string
+  streamingContent: string
   acceptingProposal: string | null
   onAccept: (proposal: CaptureProposalPreview) => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, sending])
+  }, [messages, sending, streamStatus, streamingContent])
 
   return (
     <div className="flex-1 space-y-6 overflow-y-auto py-4">
@@ -336,12 +389,25 @@ function ConversationView({
       ))}
       {sending && (
         <div className="flex justify-start">
-          <div className="max-w-[min(85%,42rem)] rounded-2xl rounded-bl-sm bg-gray-50 px-4 py-3 dark:bg-gray-800/30">
-            <div className="flex h-5 items-center space-x-1.5">
-              <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400 dark:bg-gray-500" />
-              <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400 dark:bg-gray-500" style={{ animationDelay: '150ms' }} />
-              <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400 dark:bg-gray-500" style={{ animationDelay: '300ms' }} />
-            </div>
+          <div className="max-w-[min(85%,42rem)] rounded-2xl rounded-bl-sm bg-gray-50 px-4 py-3 text-[14px] leading-7 text-gray-800 dark:bg-gray-800/30 dark:text-gray-200">
+            {streamStatus && (
+              <p className="mb-2 text-[12px] font-medium text-violet-600 dark:text-violet-300">{streamStatus}</p>
+            )}
+            {streamingContent ? (
+              <p className="whitespace-pre-wrap">{streamingContent}</p>
+            ) : (
+              <div className="flex h-5 items-center space-x-1.5">
+                <div className="h-2 w-2 animate-bounce rounded-full bg-gray-400 dark:bg-gray-500" />
+                <div
+                  className="h-2 w-2 animate-bounce rounded-full bg-gray-400 dark:bg-gray-500"
+                  style={{ animationDelay: '150ms' }}
+                />
+                <div
+                  className="h-2 w-2 animate-bounce rounded-full bg-gray-400 dark:bg-gray-500"
+                  style={{ animationDelay: '300ms' }}
+                />
+              </div>
+            )}
           </div>
         </div>
       )}
