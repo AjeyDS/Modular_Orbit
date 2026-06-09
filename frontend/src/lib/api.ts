@@ -322,6 +322,38 @@ export interface CuriousWeaveResult {
   }>
 }
 
+export interface CompanionMessageItem {
+  id: string
+  role: 'assistant' | 'user'
+  content: string
+  meta: Record<string, unknown>
+  created_at: string
+}
+
+export interface CompanionTimelineEntry {
+  id: string
+  text: string
+  captured_at: string
+}
+
+export interface CompanionReply {
+  kind: string
+  message: string
+  quick_replies: Array<{ id?: string; label: string }>
+  target_bucket_key?: string | null
+}
+
+export interface CompanionState {
+  messages: CompanionMessageItem[]
+  timeline: CompanionTimelineEntry[]
+  pending_checkin: CompanionMessageItem | null
+  settings: Record<string, unknown>
+}
+
+export interface CompanionMessageResponse {
+  reply: CompanionReply
+}
+
 export interface StoryBucketItem {
   id: string
   stable_key: string
@@ -635,6 +667,33 @@ export function completeCuriousOnboarding(sessionId: string): Promise<CuriousCom
     method: 'POST',
     body: JSON.stringify({ session_id: sessionId }),
   })
+}
+
+export function fetchCompanionState(): Promise<CompanionState> {
+  return apiFetch<CompanionState>('/modules/curious/companion/state')
+}
+
+export function sendCompanionMessage(message: string): Promise<CompanionMessageResponse> {
+  return apiFetch<CompanionMessageResponse>('/modules/curious/companion/message', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  })
+}
+
+export function endCompanionSession(): Promise<CuriousWeaveResult> {
+  return apiFetch<CuriousWeaveResult>('/modules/curious/companion/end', { method: 'POST' })
+}
+
+export function sendCompanionEndBeacon(): boolean {
+  const path = '/api/modules/curious/companion/end'
+  if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+    return navigator.sendBeacon(path, new Blob(['{}'], { type: 'application/json' }))
+  }
+  if (typeof fetch !== 'undefined') {
+    void fetch(path, { method: 'POST', keepalive: true })
+    return true
+  }
+  return false
 }
 
 export function fetchStoryBuckets(): Promise<StoryBucketItem[]> {
