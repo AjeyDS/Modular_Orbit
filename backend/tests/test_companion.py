@@ -246,6 +246,37 @@ def test_weave_merges_companion_updates(tmp_path, monkeypatch) -> None:
             assert "EAD" in cur.fetchone()["content"]
 
 
+def test_due_check_prepares_checkin_when_enabled(tmp_path, monkeypatch) -> None:
+    from app.modules.companion import get_or_create_companion_session, prepare_due_checkin
+
+    _ready_companion(tmp_path)
+    import app.modules.companion as companion
+
+    monkeypatch.setattr(companion, "_companion_settings", lambda: {
+        "companion_enabled": True, "companion_checkins_per_day": 3,
+        "companion_persona_preset": "warm", "companion_persona_override": "",
+    })
+    monkeypatch.setattr(companion, "generate_companion_question", lambda: {
+        "opening_message": "Morning — how's the day shaping up?",
+        "target_bucket_key": "habits", "quick_replies": [], "rationale": "checkin",
+    })
+
+    prepared = prepare_due_checkin()
+    assert prepared is not None
+    assert prepare_due_checkin() is None
+
+
+def test_due_check_off_when_frequency_zero(tmp_path, monkeypatch) -> None:
+    _ready_companion(tmp_path)
+    import app.modules.companion as companion
+
+    monkeypatch.setattr(companion, "_companion_settings", lambda: {
+        "companion_enabled": True, "companion_checkins_per_day": 0,
+        "companion_persona_preset": "warm", "companion_persona_override": "",
+    })
+    assert companion.prepare_due_checkin() is None
+
+
 def test_filler_user_turn_records_message_but_no_capture(tmp_path) -> None:
     from app.modules.companion import get_or_create_companion_session, record_user_turn
 

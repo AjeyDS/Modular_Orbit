@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -370,6 +370,86 @@ def _companion_ask(session_id: UUID | str) -> dict[str, Any]:
         "quick_replies": question.get("quick_replies") or [],
         "target_bucket_key": question["target_bucket_key"],
     }
+
+
+def prepare_due_checkin() -> dict[str, Any] | None:
+    settings = _companion_settings()
+    if not settings.get("companion_enabled", True):
+        return None
+    checkins_per_day = int(settings.get("companion_checkins_per_day") or 0)
+    if checkins_per_day <= 0:
+        return None
+
+    interval = timedelta(hours=24 / checkins_per_day)
+    session = get_or_create_companion_session()
+    session_id = session["id"]
+
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            now = _db_now(conn)
+            cur.execute(
+                """
+                SELECT id, content, meta, created_at
+                FROM companion_messages
+                WHERE session_id = %s
+                    AND role = 'assistant'
+                    AND meta ->> 'kind' = 'checkin'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            )
+            latest_checkin = cur.fetchone()
+            if latest_checkin is not None:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM companion_messages
+                    WHERE session_id = %s
+                        AND role = 'user'
+                        AND created_at > %s
+                    """,
+                    (session_id, latest_checkin["created_at"]),
+                )
+                if cur.fetchone()["c"] == 0:
+                    return None
+                if now - latest_checkin["created_at"] < interval:
+                    return None
+
+    question = generate_companion_question()
+    with transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO companion_messages (session_id, role, content, meta)
+                VALUES (%s, 'assistant', %s, %s)
+                RETURNING id
+                """,
+                (
+                    session_id,
+                    question["opening_message"],
+                    Jsonb({
+                        "kind": "checkin",
+                        "target_bucket_key": question["target_bucket_key"],
+                        "quick_replies": question.get("quick_replies") or [],
+                    }),
+                ),
+            )
+            message_id = cur.fetchone()["id"]
+
+    return {
+        "kind": "checkin",
+        "message": question["opening_message"],
+        "target_bucket_key": question["target_bucket_key"],
+        "quick_replies": question.get("quick_replies") or [],
+        "message_id": str(message_id),
+    }
+
+
+def _db_now(conn) -> datetime:
+    with conn.cursor() as cur:
+        cur.execute("SELECT now() AS now")
+        return cur.fetchone()["now"]
 
 
 def synthesize_companion_session(session_id: UUID | str) -> None:
