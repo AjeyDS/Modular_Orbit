@@ -126,14 +126,12 @@ def test_meaningfulness_gate_uses_llm_when_available(monkeypatch) -> None:
     assert companion.is_meaningful_reply("ok") is True
 
 
-def test_meaningful_user_turn_creates_capture_and_chunk(tmp_path) -> None:
+def test_meaningful_turn_creates_log_not_curious_capture(tmp_path) -> None:
     from app.modules.companion import get_or_create_companion_session, record_user_turn
 
     _ready_companion(tmp_path)
     session = get_or_create_companion_session()
-
     record_user_turn(session["id"], "My EAD card was approved today")
-
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -144,13 +142,16 @@ def test_meaningful_user_turn_creates_capture_and_chunk(tmp_path) -> None:
             cur.execute(
                 "SELECT COUNT(*) AS c FROM life_items WHERE item_type = 'curious_capture'"
             )
-            captures = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) AS c FROM knowledge_chunks")
-            chunks = cur.fetchone()["c"]
-
+            assert cur.fetchone()["c"] == 0
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c FROM life_items li
+                JOIN module_instances mi ON mi.id = li.module_instance_id
+                WHERE mi.module_id = 'logs' AND li.item_type = 'log'
+                """
+            )
+            assert cur.fetchone()["c"] == 1
     assert any(m["role"] == "user" and "EAD" in m["content"] for m in messages)
-    assert captures == 1
-    assert chunks >= 1
 
 
 def test_companion_context_includes_buckets_and_goals(tmp_path) -> None:
@@ -269,7 +270,13 @@ def test_synthesis_no_facts_when_llm_down(tmp_path) -> None:
     synthesize_companion_session(session["id"])
     with connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS c FROM life_items WHERE item_type = 'curious_capture'")
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c FROM life_items li
+                JOIN module_instances mi ON mi.id = li.module_instance_id
+                WHERE mi.module_id = 'logs' AND li.item_type = 'log'
+                """
+            )
             assert cur.fetchone()["c"] == 1
 
 
@@ -378,7 +385,7 @@ def test_companion_http_send_and_state(tmp_path) -> None:
     assert any("EAD" in m.get("content", "") for m in state2.json()["messages"])
 
 
-def test_filler_user_turn_records_message_but_no_capture(tmp_path) -> None:
+def test_filler_user_turn_records_message_but_no_log(tmp_path) -> None:
     from app.modules.companion import get_or_create_companion_session, record_user_turn
 
     _ready_companion(tmp_path)
@@ -386,5 +393,11 @@ def test_filler_user_turn_records_message_but_no_capture(tmp_path) -> None:
     record_user_turn(session["id"], "thanks!")
     with connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS c FROM life_items WHERE item_type = 'curious_capture'")
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c FROM life_items li
+                JOIN module_instances mi ON mi.id = li.module_instance_id
+                WHERE mi.module_id = 'logs' AND li.item_type = 'log'
+                """
+            )
             assert cur.fetchone()["c"] == 0

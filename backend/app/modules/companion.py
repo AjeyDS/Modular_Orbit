@@ -19,6 +19,7 @@ from app.modules.curious import (
     get_curious_page_state,
     weave_pending_curious_updates,
 )
+from app.modules.logs import LogCreate, create_log
 from app.user_model import list_goals
 
 
@@ -30,12 +31,6 @@ class CompanionMessage(BaseModel):
     created_at: datetime
 
 
-class CompanionTimelineEntry(BaseModel):
-    id: UUID
-    text: str
-    captured_at: datetime
-
-
 class CompanionReply(BaseModel):
     kind: str
     message: str
@@ -45,7 +40,6 @@ class CompanionReply(BaseModel):
 
 class CompanionState(BaseModel):
     messages: list[CompanionMessage]
-    timeline: list[CompanionTimelineEntry]
     pending_checkin: CompanionMessage | None = None
     settings: dict[str, Any] = Field(default_factory=dict)
 
@@ -175,40 +169,14 @@ def record_user_turn(
     if not capture or not is_meaningful_reply(text):
         return
 
-    result = create_life_item(
-        module_id="curious",
-        item_type="curious_capture",
-        title=_derive_title(text),
-        description=text,
-        payload={"text": text, "session_id": str(session_id)},
-        source={"kind": "companion_capture", "session_id": str(session_id)},
-        request_id=f"companion-capture-{message_id}",
+    create_log(
+        LogCreate(
+            text=text,
+            request_id=f"companion-capture-{message_id}",
+            source={"kind": "companion_capture", "session_id": str(session_id)},
+        ),
+        review=False,
     )
-    capture_id = result.item["id"]
-    with transaction() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO knowledge_chunks (life_item_id, content, source_type, metadata)
-                VALUES (%s, %s, 'companion_capture', %s)
-                """,
-                (
-                    capture_id,
-                    text,
-                    Jsonb({"session_id": str(session_id), "message_id": str(message_id)}),
-                ),
-            )
-            cur.execute(
-                """
-                UPDATE life_items
-                SET connection_status = 'complete',
-                    chunk_status = 'complete',
-                    bucket_update_status = 'pending',
-                    updated_at = now()
-                WHERE id = %s
-                """,
-                (capture_id,),
-            )
 
 
 def build_companion_context() -> str:
@@ -570,16 +538,19 @@ def synthesize_companion_session(session_id: UUID | str) -> None:
             messages = cur.fetchall()
             cur.execute(
                 """
-                SELECT id
-                FROM life_items
-                WHERE item_type = 'curious_capture'
-                    AND payload ->> 'session_id' = %s
-                    AND lifecycle_status <> 'deleted'
-                ORDER BY created_at
+                SELECT li.id
+                FROM life_items li
+                JOIN module_instances mi ON mi.id = li.module_instance_id
+                WHERE mi.module_id = 'logs'
+                    AND li.item_type = 'log'
+                    AND li.source ->> 'session_id' = %s
+                    AND li.lifecycle_status <> 'deleted'
+                ORDER BY li.created_at DESC
+                LIMIT 1
                 """,
                 (str(session_id),),
             )
-            capture_rows = cur.fetchall()
+            log_row = cur.fetchone()
 
     if not messages:
         return
@@ -602,7 +573,7 @@ def synthesize_companion_session(session_id: UUID | str) -> None:
     except (LLMUnavailable, Exception):
         return
 
-    link_item_id = capture_rows[0]["id"] if capture_rows else session_id
+    link_item_id = log_row["id"] if log_row else session_id
     facts = []
     for fact in raw_facts:
         if not isinstance(fact, dict):
@@ -649,17 +620,6 @@ def synthesize_companion_session(session_id: UUID | str) -> None:
                         }),
                     ),
                 )
-            cur.execute(
-                """
-                UPDATE life_items
-                SET bucket_update_status = 'complete',
-                    updated_at = now()
-                WHERE item_type = 'curious_capture'
-                    AND payload ->> 'session_id' = %s
-                    AND lifecycle_status <> 'deleted'
-                """,
-                (str(session_id),),
-            )
 
 
 def _foundational_question_fallback(
@@ -688,13 +648,6 @@ def _foundational_question_fallback(
     }
 
 
-def _derive_title(text: str) -> str:
-    title = " ".join(text.strip().split())
-    if len(title) <= 80:
-        return title
-    return f"{title[:77].rstrip()}..."
-
-
 def get_companion_state() -> CompanionState:
     prepare_due_checkin()
     session = get_or_create_companion_session()
@@ -712,18 +665,6 @@ def get_companion_state() -> CompanionState:
                 (session_id,),
             )
             message_rows = cur.fetchall()
-            cur.execute(
-                """
-                SELECT id, description, created_at
-                FROM life_items
-                WHERE item_type = 'curious_capture'
-                    AND payload ->> 'session_id' = %s
-                    AND lifecycle_status <> 'deleted'
-                ORDER BY created_at DESC
-                """,
-                (str(session_id),),
-            )
-            capture_rows = cur.fetchall()
 
     messages = [
         CompanionMessage(
@@ -735,19 +676,10 @@ def get_companion_state() -> CompanionState:
         )
         for row in message_rows
     ]
-    timeline = [
-        CompanionTimelineEntry(
-            id=row["id"],
-            text=row["description"],
-            captured_at=row["created_at"],
-        )
-        for row in capture_rows
-    ]
     pending = _pending_checkin_message(session_id)
 
     return CompanionState(
         messages=messages,
-        timeline=timeline,
         pending_checkin=pending,
         settings=_companion_settings(),
     )
