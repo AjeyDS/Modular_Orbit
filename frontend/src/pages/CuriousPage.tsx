@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowUp, ChevronDown, Settings, Sparkles } from 'lucide-react'
+import { ArrowUp, Settings, Sparkles } from 'lucide-react'
 import {
+  askCompanionQuestion,
   endCompanionSession,
   fetchCompanionState,
   fetchShellState,
   sendCompanionEndBeacon,
   sendCompanionMessage,
+  skipCompanionQuestion,
   updateModuleInstanceSettings,
   type CompanionMessageItem,
   type CompanionState,
-  type CompanionTimelineEntry,
   type ModuleInstanceItem,
 } from '../lib/api'
 import { pageContentClass } from '../layout/pageShell'
@@ -28,7 +29,6 @@ export default function CuriousPage() {
   const [weaving, setWeaving] = useState(false)
   const [hasPendingWeave, setHasPendingWeave] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [timelineOpen, setTimelineOpen] = useState(false)
   const [curiousInstance, setCuriousInstance] = useState<ModuleInstanceItem | null>(null)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
@@ -148,6 +148,13 @@ export default function CuriousPage() {
     setDraft('')
     try {
       const response = await sendCompanionMessage(trimmed)
+      if (response.reply.kind === 'ended') {
+        pendingWeaveRef.current = false
+        setHasPendingWeave(false)
+        clearIdleWeave()
+        await load()
+        return
+      }
       const optimisticAssistant: CompanionMessageItem = {
         id: `optimistic-assistant-${Date.now()}`,
         role: 'assistant',
@@ -169,6 +176,60 @@ export default function CuriousPage() {
     } catch (err) {
       setOptimisticMessages((prev) => prev.filter((message) => message.id !== optimisticUser.id))
       setError(err instanceof Error ? err.message : 'Unable to send message')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function askQuestion() {
+    if (sending) return
+    setSending(true)
+    setError('')
+    setStatus('')
+    try {
+      await askCompanionQuestion()
+      const refreshed = await fetchCompanionState()
+      setCompanion(refreshed)
+      setOptimisticMessages([])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to ask a question')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function skipQuestion(bucketKey?: string | null) {
+    if (sending) return
+    setSending(true)
+    setError('')
+    try {
+      await skipCompanionQuestion(bucketKey)
+      const refreshed = await fetchCompanionState()
+      setCompanion(refreshed)
+      setOptimisticMessages([])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to skip question')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function endAndClearThread() {
+    await flushCuriousSession('done')
+  }
+
+  async function talkLater() {
+    if (sending) return
+    setSending(true)
+    setError('')
+    try {
+      await sendCompanionMessage('talk to you later')
+      pendingWeaveRef.current = false
+      setHasPendingWeave(false)
+      clearIdleWeave()
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to end conversation')
     } finally {
       setSending(false)
     }
@@ -196,30 +257,30 @@ export default function CuriousPage() {
     )
   }
 
-  const capturedCount = companion.timeline.length
-
   return (
     <div className="min-h-[calc(100vh-3rem)] bg-gray-50 text-gray-800 dark:bg-[#18181A] dark:text-gray-200">
       <div className={`${pageContentClass} flex min-h-[calc(100vh-3rem)] flex-col py-7`}>
         <header className="mb-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900 dark:text-gray-100">Curious</h1>
-            <p className="text-[12px] text-gray-500 dark:text-gray-500">
-              <span className="tabular-nums">{capturedCount}</span> captured moment{capturedCount === 1 ? '' : 's'}
-            </p>
-          </div>
+          <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900 dark:text-gray-100">Curious</h1>
           <div className="relative flex items-center gap-2">
-            {hasPendingWeave && (
-              <button
-                type="button"
-                disabled={weaving}
-                onClick={() => void flushCuriousSession('done')}
-                className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[12px] font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200 dark:hover:bg-emerald-950/50"
-                style={{ borderWidth: '0.5px' }}
-              >
-                {weaving ? 'Updating…' : 'Done for now'}
-              </button>
-            )}
+            <button
+              type="button"
+              disabled={sending || weaving}
+              onClick={() => void askQuestion()}
+              className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-[12px] font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-200 dark:hover:bg-blue-950/50"
+              style={{ borderWidth: '0.5px' }}
+            >
+              Ask me something
+            </button>
+            <button
+              type="button"
+              disabled={weaving}
+              onClick={() => void endAndClearThread()}
+              className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[12px] font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200 dark:hover:bg-emerald-950/50"
+              style={{ borderWidth: '0.5px' }}
+            >
+              {weaving ? 'Updating…' : 'Done'}
+            </button>
             <button
               type="button"
               onClick={() => setSettingsOpen((open) => !open)}
@@ -261,7 +322,12 @@ export default function CuriousPage() {
             className="flex min-h-[20rem] flex-1 flex-col rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
             style={{ borderWidth: '0.5px' }}
           >
-            <CompanionThread messages={threadMessages} onQuickReply={(label) => void sendMessage(label)} />
+            <CompanionThread
+              messages={threadMessages}
+              onQuickReply={(label) => void sendMessage(label)}
+              onSkip={(bucketKey) => void skipQuestion(bucketKey)}
+              onTalkLater={() => void talkLater()}
+            />
             <div className="border-t border-gray-100 p-3 dark:border-gray-800">
               <div
                 className="relative rounded-2xl border border-gray-200 bg-white shadow-sm transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
@@ -300,12 +366,6 @@ export default function CuriousPage() {
               </div>
             </div>
           </section>
-
-          <CapturedMomentsTimeline
-            open={timelineOpen}
-            onToggle={() => setTimelineOpen((value) => !value)}
-            timeline={companion.timeline}
-          />
         </div>
       </div>
     </div>
@@ -340,9 +400,13 @@ function PendingCheckinGreeting({
 function CompanionThread({
   messages,
   onQuickReply,
+  onSkip,
+  onTalkLater,
 }: {
   messages: CompanionMessageItem[]
   onQuickReply: (label: string) => void
+  onSkip: (bucketKey?: string | null) => void
+  onTalkLater: () => void
 }) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -380,13 +444,34 @@ function CompanionThread({
           >
             <p className="whitespace-pre-wrap">{message.content}</p>
             {message.role === 'assistant' && (
-              <QuickReplyChips replies={parseQuickReplies(message.meta)} onSelect={onQuickReply} />
+              <>
+                {parseMessageKind(message.meta) === 'question' && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <LifecycleChip label="Skip" onClick={() => onSkip(readBucketKey(message.meta))} />
+                    <LifecycleChip label="Talk later" onClick={onTalkLater} />
+                  </div>
+                )}
+                <QuickReplyChips replies={parseQuickReplies(message.meta)} onSelect={onQuickReply} />
+              </>
             )}
           </div>
         </article>
       ))}
       <div ref={bottomRef} />
     </div>
+  )
+}
+
+function LifecycleChip({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[12px] text-gray-600 transition-colors hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#1C1C1E] dark:text-gray-400 dark:hover:border-gray-600"
+      style={{ borderWidth: '0.5px' }}
+    >
+      {label}
+    </button>
   )
 }
 
@@ -412,77 +497,6 @@ function QuickReplyChips({
         </button>
       ))}
     </div>
-  )
-}
-
-function CapturedMomentsTimeline({
-  open,
-  onToggle,
-  timeline,
-}: {
-  open: boolean
-  onToggle: () => void
-  timeline: CompanionTimelineEntry[]
-}) {
-  const grouped = useMemo(() => groupTimelineByDay(timeline), [timeline])
-
-  return (
-    <section
-      className="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
-      style={{ borderWidth: '0.5px' }}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
-      >
-        <div className="flex items-baseline gap-3">
-          <span className="text-[14px] font-semibold text-gray-800 dark:text-gray-200">Captured moments</span>
-          <span className="text-[12px] text-gray-500 dark:text-gray-500">
-            <span className="tabular-nums">{timeline.length}</span> moment{timeline.length === 1 ? '' : 's'}
-          </span>
-        </div>
-        <ChevronDown
-          size={16}
-          className={`shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-
-      {open && (
-        <div className="border-t border-gray-100 px-5 py-5 dark:border-gray-800">
-          {timeline.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-4 py-6 text-center text-[13px] text-gray-400 dark:border-gray-700 dark:bg-[#18181A]">
-              Nothing captured yet. Share an update in the conversation above.
-            </p>
-          ) : (
-            <div className="space-y-6">
-              {grouped.map(([dayLabel, entries]) => (
-                <div key={dayLabel}>
-                  <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">
-                    {dayLabel}
-                  </p>
-                  <div className="space-y-2">
-                    {entries.map((entry) => (
-                      <article
-                        key={entry.id}
-                        className="rounded-xl border border-gray-200 bg-gray-50/60 px-4 py-3 dark:border-gray-800 dark:bg-[#18181A]"
-                        style={{ borderWidth: '0.5px' }}
-                      >
-                        <p className="text-[13px] leading-6 text-gray-700 dark:text-gray-300">{entry.text}</p>
-                        <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
-                          {formatTime(entry.captured_at)}
-                        </p>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </section>
   )
 }
 
@@ -618,6 +632,14 @@ function CuriousSettingsPopover({
   )
 }
 
+function parseMessageKind(meta: Record<string, unknown>): string {
+  return typeof meta.kind === 'string' ? meta.kind : ''
+}
+
+function readBucketKey(meta: Record<string, unknown>): string | null {
+  return typeof meta.target_bucket_key === 'string' ? meta.target_bucket_key : null
+}
+
 function parseQuickReplies(meta: Record<string, unknown>): QuickReply[] {
   const raw = meta.quick_replies
   if (!Array.isArray(raw)) return []
@@ -635,21 +657,3 @@ function parseQuickReplies(meta: Record<string, unknown>): QuickReply[] {
     .filter((item): item is QuickReply => item !== null)
 }
 
-function groupTimelineByDay(timeline: CompanionTimelineEntry[]): Array<[string, CompanionTimelineEntry[]]> {
-  const groups = new Map<string, CompanionTimelineEntry[]>()
-  for (const entry of timeline) {
-    const dayLabel = new Date(entry.captured_at).toLocaleDateString(undefined, {
-      weekday: 'long',
-      month: 'short',
-      day: 'numeric',
-    })
-    const bucket = groups.get(dayLabel) ?? []
-    bucket.push(entry)
-    groups.set(dayLabel, bucket)
-  }
-  return [...groups.entries()]
-}
-
-function formatTime(value: string): string {
-  return new Date(value).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-}
