@@ -131,6 +131,25 @@ def test_router_selects_modules_via_lexical_fallback() -> None:
     assert d1.modules == [m for m in d1.modules if m in QUERYABLE_MODULES]
 
 
+def test_structured_context_renders_selected_modules(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.chat.actions import _structured_context
+    from app.modules.tasks import TaskCreate, create_task
+    from app.user_model.goals import create_goal
+
+    create_task(TaskCreate(title="Renew passport"), review=False)
+    create_goal(title="Start an LLC", status="active", horizon="short_term")
+    block = _structured_context(["tasks", "goals"])
+    assert "Renew passport" in block
+    assert "Start an LLC" in block
+
+
+def test_structured_context_empty_when_no_modules() -> None:
+    from app.chat.actions import _structured_context
+
+    assert _structured_context([]) == ""
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))

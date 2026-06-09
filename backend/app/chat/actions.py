@@ -719,6 +719,85 @@ def _context_excerpts(context: str, *, limit: int = 4) -> list[str]:
     return [line[:700] for line in useful[:limit]]
 
 
+def _structured_tasks_context() -> str:
+    from app.modules.tasks import list_tasks
+
+    tasks = list_tasks(status="active", limit=10)
+    if not tasks:
+        return ""
+
+    def key(t):
+        return (t.due_date is None, t.due_date)
+
+    lines = [
+        f"- {t.title} — due {t.due_date or 'none'}, priority {t.priority or '-'}, {t.module_status or 'active'}"
+        for t in sorted(tasks, key=key)
+    ]
+    return "Tasks:\n" + "\n".join(lines)
+
+
+def _structured_plans_context() -> str:
+    from app.modules.plans import list_plans
+
+    plans = list_plans(status="active")
+    if not plans:
+        return ""
+    return "Plans:\n" + "\n".join(
+        f"- {p.title} — {p.completed_steps}/{p.total_steps} steps ({p.progress_percent}%)"
+        for p in plans
+    )
+
+
+def _structured_goals_context() -> str:
+    from app.user_model.goals import list_goals as list_structured_goals
+
+    goals = list_structured_goals()
+    if not goals:
+        return ""
+    return "Goals:\n" + "\n".join(
+        f"- {g.status}/{g.horizon}: {g.title}"
+        + (f" — target {g.target_note or g.target_date}" if (g.target_note or g.target_date) else "")
+        for g in goals[:10]
+    )
+
+
+def _structured_routines_context() -> str:
+    from app.modules.routine import list_routine_state
+
+    state = list_routine_state()
+    if not state.items:
+        return ""
+    return "Routines:\n" + "\n".join(
+        f"- {it.title} — streak {it.streak_count}, today: {'done' if it.today_completed else 'not done'}"
+        for it in state.items[:10]
+    )
+
+
+_STRUCTURED = {
+    "tasks": _structured_tasks_context,
+    "plans": _structured_plans_context,
+    "goals": _structured_goals_context,
+    "routines": _structured_routines_context,
+}
+
+
+def _structured_context(modules: list[str]) -> str:
+    blocks: list[str] = []
+    for module in modules:
+        fn = _STRUCTURED.get(module)
+        if fn is None:
+            continue
+        try:
+            block = fn()
+        except Exception:
+            block = ""
+        if block:
+            blocks.append(block)
+    if not blocks:
+        return ""
+    return "Structured data:\n" + "\n\n".join(blocks)
+
+
 def _build_answer_context(mode: ChatMode, message: str) -> str:
     if mode == "fast":
         sections = [_chunk_context(message, limit=4), _connection_context(message), _goal_context()]
