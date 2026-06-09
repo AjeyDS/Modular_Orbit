@@ -26,6 +26,17 @@ def _session_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
 
 
+def test_retrieval_query_does_not_dilute_narrow(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.chat.actions import _retrieval_query, RouteDecision
+    narrow = RouteDecision(breadth="narrow", buckets=["career"], expansion_terms=["promotion", "mentoring"])
+    broad = RouteDecision(breadth="broad", buckets=["career", "aspirations"], expansion_terms=["promotion", "mentoring"])
+    msg = "when is my dentist appointment"
+    assert _retrieval_query(msg, narrow) == msg
+    assert "promotion" in _retrieval_query(msg, broad)
+    assert _retrieval_query(msg, broad).startswith(msg)
+
+
 def test_router_fallback_selects_buckets_and_breadth(tmp_path) -> None:
     _ready(tmp_path)
     from app.chat.actions import _route_and_classify

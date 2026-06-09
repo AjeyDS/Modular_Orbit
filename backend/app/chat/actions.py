@@ -800,6 +800,12 @@ def _select_buckets_fallback(message: str, catalog: list[dict[str, str]] | None 
     return picked or [scored[0]["stable_key"]] if scored else []
 
 
+def _retrieval_query(message: str, decision: RouteDecision) -> str:
+    if decision.breadth == "broad" and decision.expansion_terms:
+        return f"{message} " + " ".join(decision.expansion_terms)
+    return message
+
+
 def _route_prompt(message: str, catalog: list[dict[str, str]]) -> str:
     lines = "\n".join(f"- {b['stable_key']}: {b['display_name']} — {b['description']}" for b in catalog)
     return (
