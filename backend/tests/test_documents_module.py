@@ -437,6 +437,40 @@ def test_documents_api_upload_markdown_file() -> None:
     remove_document(created["id"])
 
 
+def test_life_relevant_document_enriches_buckets(tmp_path, monkeypatch) -> None:
+    import app.modules.documents as docs
+
+    monkeypatch.setattr(docs, "_route_document_buckets", lambda content, summary: ["career"])
+    create_document(
+        DocumentCreate(original_name="plan.md", content="LLC self-employment action plan"),
+        review=False,
+        review_root=tmp_path,
+    )
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS c FROM bucket_updates WHERE source_event->>'source' = 'documents'"
+            )
+            assert cur.fetchone()["c"] == 1
+
+
+def test_reference_document_enriches_nothing(tmp_path, monkeypatch) -> None:
+    import app.modules.documents as docs
+
+    monkeypatch.setattr(docs, "_route_document_buckets", lambda content, summary: [])
+    create_document(
+        DocumentCreate(original_name="fee.pdf", content="SEVIS fee receipt number 123"),
+        review=False,
+        review_root=tmp_path,
+    )
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS c FROM bucket_updates WHERE source_event->>'source' = 'documents'"
+            )
+            assert cur.fetchone()["c"] == 0
+
+
 def test_documents_api_upload_rejects_unsupported_file() -> None:
     client = TestClient(app)
 
