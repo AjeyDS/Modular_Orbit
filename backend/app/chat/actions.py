@@ -721,7 +721,10 @@ def _chat_system_prompt(mode: ChatMode) -> str:
         "You are Orbit, a personal AI advisor for one person. Be concise, grounded, "
         "and useful. Use the provided Story Buckets, Goals, module data, Connections, "
         "and Knowledge Chunks only as context; do not invent private facts. "
-        f"{formatting}"
+        f"{formatting} "
+        "Render values in plain, natural language. Do not echo raw field names or status "
+        "codes verbatim (e.g. 'Admit Until Date: D/S'); translate them ('admitted for "
+        "duration of status') or omit if unclear."
     )
     if mode == "fast":
         return f"{base} This is Fast Chat: answer directly from retrieved knowledge; minimal assumptions."

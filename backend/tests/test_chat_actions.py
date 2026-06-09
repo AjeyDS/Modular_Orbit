@@ -240,6 +240,13 @@ def test_understanding_prompt_has_focus_ranking_guidance() -> None:
     assert "due" in prompt
 
 
+def test_prompt_discourages_raw_field_labels() -> None:
+    from app.chat.actions import _chat_system_prompt
+
+    prompt = _chat_system_prompt("understanding").lower()
+    assert "plain" in prompt or "raw field" in prompt or "verbatim" in prompt
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))
