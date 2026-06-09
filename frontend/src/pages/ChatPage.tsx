@@ -196,11 +196,15 @@ export default function ChatPage() {
     setAcceptingProposal(proposal.id)
     try {
       const response = await confirmCaptureProposal(proposal.id)
+      const savedMessage =
+        response.module_id === 'goals' && response.goal_id
+          ? 'Saved as a tentative goal — view it on the Goals page.'
+          : `Saved ${response.module_id} item.`
       setMessages((current) => [
         ...current,
         {
           role: 'system',
-          content: `Saved ${response.module_id} item.`,
+          content: savedMessage,
         },
       ])
     } catch (err) {
@@ -361,9 +365,12 @@ function ConversationView({
                       <div>
                         <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-blue-500">
                           <Sparkles size={13} />
-                          Preview {proposal.module_id}
+                          {proposalLabel(proposal)}
                         </p>
                         <h3 className="mt-1 text-[14px] font-medium">{proposal.title}</h3>
+                        {goalTargetHint(proposal) && (
+                          <p className="mt-1 text-[12px] text-gray-500 dark:text-gray-400">{goalTargetHint(proposal)}</p>
+                        )}
                         {proposal.description && (
                           <p className="mt-1 text-[13px] leading-6 text-gray-500 dark:text-gray-400">
                             {proposal.description}
@@ -569,4 +576,16 @@ function ModePicker({ mode, onChange }: { mode: ChatMode; onChange: (mode: ChatM
       )}
     </div>
   )
+}
+
+function proposalLabel(proposal: CaptureProposalPreview) {
+  if (proposal.module_id === 'goals') return 'Add as goal?'
+  return `Preview ${proposal.module_id}`
+}
+
+function goalTargetHint(proposal: CaptureProposalPreview) {
+  if (proposal.module_id !== 'goals') return null
+  const note = typeof proposal.payload?.target_note === 'string' ? proposal.payload.target_note.trim() : ''
+  if (note) return note
+  return proposal.payload?.horizon === 'short_term' ? 'Short-term goal' : 'Long-term goal'
 }
