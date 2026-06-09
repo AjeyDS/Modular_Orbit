@@ -247,13 +247,21 @@ def confirm_capture_proposal(request: ConfirmCaptureProposalRequest) -> ConfirmC
             proposal = cur.fetchone()
             if proposal is None:
                 raise ValueError(f"Unknown Capture Proposal: {request.proposal_id}")
-            if proposal["status"] == "accepted" and proposal["created_life_item_id"] is not None:
-                return ConfirmCaptureProposalResponse(
-                    proposal_id=proposal["id"],
-                    module_id=proposal["module_id"],
-                    life_item_id=proposal["created_life_item_id"],
-                    status="accepted",
-                )
+            if proposal["status"] == "accepted":
+                if proposal["module_id"] == "goals" and proposal.get("created_goal_id"):
+                    return ConfirmCaptureProposalResponse(
+                        proposal_id=proposal["id"],
+                        module_id=proposal["module_id"],
+                        goal_id=proposal["created_goal_id"],
+                        status="accepted",
+                    )
+                if proposal["created_life_item_id"] is not None:
+                    return ConfirmCaptureProposalResponse(
+                        proposal_id=proposal["id"],
+                        module_id=proposal["module_id"],
+                        life_item_id=proposal["created_life_item_id"],
+                        status="accepted",
+                    )
             if proposal["status"] != "previewed":
                 raise ValueError(f"Capture Proposal is not confirmable: {request.proposal_id}")
 
@@ -261,17 +269,36 @@ def confirm_capture_proposal(request: ConfirmCaptureProposalRequest) -> ConfirmC
 
     with transaction() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE capture_proposals
-                SET status = 'accepted',
-                    created_life_item_id = %s,
-                    updated_at = now()
-                WHERE id = %s
-                """,
-                (created["life_item_id"], request.proposal_id),
-            )
+            if proposal["module_id"] == "goals":
+                cur.execute(
+                    """
+                    UPDATE capture_proposals
+                    SET status = 'accepted',
+                        created_goal_id = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (created["goal_id"], request.proposal_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE capture_proposals
+                    SET status = 'accepted',
+                        created_life_item_id = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (created["life_item_id"], request.proposal_id),
+                )
 
+    if proposal["module_id"] == "goals":
+        return ConfirmCaptureProposalResponse(
+            proposal_id=request.proposal_id,
+            module_id=proposal["module_id"],
+            goal_id=created["goal_id"],
+            status="accepted",
+        )
     return ConfirmCaptureProposalResponse(
         proposal_id=request.proposal_id,
         module_id=proposal["module_id"],
@@ -514,7 +541,7 @@ def _persist_preview(session_id: str, proposal: DetectedProposal) -> CaptureProp
     return _row_to_preview(row, retrieval_policy)
 
 
-def _create_from_proposal(proposal: dict[str, Any]) -> dict[str, UUID]:
+def _create_from_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
     request_id = f"chat-proposal-{proposal['id']}"
     payload = proposal["payload"] or {}
     module_id = proposal["module_id"]
@@ -562,6 +589,15 @@ def _create_from_proposal(proposal: dict[str, Any]) -> dict[str, UUID]:
                 source={"kind": "chat_action", "proposal_id": str(proposal["id"])},
             )
         )
+    elif module_id == "goals":
+        goal = create_goal(
+            title=proposal["title"],
+            body=proposal["description"],
+            status="tentative",
+            horizon=payload.get("horizon", "long_term"),
+            target_note=payload.get("target_note"),
+        )
+        return {"goal_id": goal.goal_id}
     else:
         raise ValueError(f"Unsupported proposal module: {module_id}")
 

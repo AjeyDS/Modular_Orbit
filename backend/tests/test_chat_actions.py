@@ -31,6 +31,31 @@ def test_questions_do_not_produce_capture_suggestions() -> None:
     assert _detect_capture_proposals("when is my appointment?") == []
 
 
+def test_confirming_goal_proposal_creates_tentative_goal() -> None:
+    from app.chat.actions import (
+        ConfirmCaptureProposalRequest,
+        _persist_preview,
+        _proposal_for_module,
+        confirm_capture_proposal,
+    )
+    from app.user_model.goals import list_goals
+
+    session_id = _session_id("goal-confirm")
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO chat_sessions (id) VALUES (%s) ON CONFLICT DO NOTHING",
+                (session_id,),
+            )
+        conn.commit()
+
+    proposal = _proposal_for_module("goals", "become a staff engineer", explicit=True)
+    preview = _persist_preview(session_id, proposal)
+    resp = confirm_capture_proposal(ConfirmCaptureProposalRequest(proposal_id=preview.id))
+    assert resp.goal_id is not None
+    assert any(g.goal_id == resp.goal_id and g.status == "tentative" for g in list_goals())
+
+
 def test_explicit_add_goal_detected() -> None:
     proposals = _detect_capture_proposals("add this as a goal: become a staff engineer")
     assert proposals and proposals[0].module_id == "goals"
