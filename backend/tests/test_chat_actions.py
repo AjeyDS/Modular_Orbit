@@ -613,3 +613,29 @@ def test_chat_api_respond_and_confirm(tmp_path) -> None:
     )
     assert confirm_response.status_code == 200
     assert confirm_response.json()["module_id"] == "logs"
+
+
+def test_recent_history_returns_last_turns_in_order() -> None:
+    from app.chat.actions import _recent_history
+    from app.chat.sessions import insert_chat_message, upsert_session_for_message
+    from app.db import transaction
+
+    sid = _session_id("hist")
+    # Separate transactions so created_at differs per turn, matching production
+    # (now() is constant within a single transaction).
+    with transaction() as conn:
+        upsert_session_for_message(conn, sid, initial_title="t")
+        insert_chat_message(conn, session_id=sid, role="user", content="first")
+    with transaction() as conn:
+        insert_chat_message(conn, session_id=sid, role="assistant", content="answer one")
+    with transaction() as conn:
+        insert_chat_message(conn, session_id=sid, role="user", content="second")
+    hist = _recent_history(sid, limit=6)
+    assert [r for r, _ in hist] == ["user", "assistant", "user"]
+    assert hist[0][1] == "first" and hist[-1][1] == "second"
+
+
+def test_recent_history_empty_for_new_session() -> None:
+    from app.chat.actions import _recent_history
+
+    assert _recent_history("does-not-exist") == []

@@ -1111,6 +1111,19 @@ def _user_model_index() -> str:
     return "\n\n".join(section for section in sections if section.strip())
 
 
+def _recent_history(session_id: str, *, limit: int = 6, char_cap: int = 500) -> list[tuple[str, str]]:
+    try:
+        from app.chat.sessions import list_chat_messages
+        msgs = list_chat_messages(session_id)
+    except Exception:
+        return []
+    out: list[tuple[str, str]] = []
+    for m in msgs[-limit:]:
+        if m.role in ("user", "assistant"):
+            out.append((m.role, (m.content or "")[:char_cap]))
+    return out
+
+
 def _think(message: str) -> ThinkingPlan:
     try:
         data = generate_json(
