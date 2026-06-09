@@ -406,8 +406,8 @@ def test_filler_user_turn_records_message_but_no_log(tmp_path) -> None:
 # --- Bug fixes: bucket-key normalization, log status, gate tightening ---
 
 import app.modules.companion as companion
+from app.lifecycle.bucket_keys import normalize_bucket_key
 from app.modules.companion import (
-    _normalize_bucket_key,
     generate_companion_question,
     get_or_create_companion_session,
     is_meaningful_reply,
@@ -417,11 +417,11 @@ from app.modules.companion import (
 
 
 def test_normalize_bucket_key_maps_display_names_and_rejects_invented() -> None:
-    assert _normalize_bucket_key("Aspirations") == "aspirations"
-    assert _normalize_bucket_key("Who Am I") == "who_am_i"
-    assert _normalize_bucket_key("career") == "career"
-    assert _normalize_bucket_key("employment_authorization_document") is None
-    assert _normalize_bucket_key(None) is None
+    assert normalize_bucket_key("Aspirations") == "aspirations"
+    assert normalize_bucket_key("Who Am I") == "who_am_i"
+    assert normalize_bucket_key("career") == "career"
+    assert normalize_bucket_key("employment_authorization_document") is None
+    assert normalize_bucket_key(None) is None
 
 
 def test_generate_question_accepts_display_name_key(tmp_path, monkeypatch) -> None:

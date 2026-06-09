@@ -24,10 +24,7 @@ from app.user_model import list_goals
 ChatMode = Literal["fast", "understanding"]
 ConfidenceBucket = Literal["low", "medium", "high"]
 
-KNOWN_BUCKET_KEYS = {
-    "who_am_i", "goals", "interests_and_works", "career",
-    "health", "relationships", "habits", "aspirations",
-}
+from app.lifecycle.bucket_keys import KNOWN_BUCKET_KEYS
 _BROAD_MARKERS = (
     "what should i", "what are the things", "what do i", "focus on",
     "my life", "everything", "overall", "in general", "priorities",
