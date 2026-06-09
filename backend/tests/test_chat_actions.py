@@ -143,6 +143,16 @@ def test_advice_query_forces_actionable_modules() -> None:
     assert decision.breadth == "broad"
 
 
+def test_advice_query_includes_structured_context(tmp_path) -> None:
+    _ready(tmp_path)
+    from app.modules.tasks import TaskCreate, create_task
+
+    create_task(TaskCreate(title="Renew passport"), review=False)
+    ctx = _build_answer_context("understanding", "what can I learn next to fuel my career?")
+    assert "Structured data" in ctx
+    assert "Renew passport" in ctx
+
+
 def test_focus_query_forces_actionable_modules() -> None:
     from app.chat.actions import _route_and_classify
 
