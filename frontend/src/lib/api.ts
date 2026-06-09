@@ -217,8 +217,38 @@ export interface ChatResponse {
 export interface ConfirmCaptureProposalResponse {
   proposal_id: string
   module_id: string
-  life_item_id: string
+  life_item_id: string | null
+  goal_id: string | null
   status: string
+}
+
+export type GoalHorizon = 'short_term' | 'long_term'
+export type GoalStatus = 'active' | 'tentative'
+
+export interface GoalItem {
+  goal_id: string
+  title: string
+  body: string
+  status: GoalStatus
+  horizon: GoalHorizon
+  target_date: string | null
+  target_note: string | null
+}
+
+export interface GoalCreateRequest {
+  title: string
+  body?: string
+  horizon?: GoalHorizon
+  target_date?: string | null
+  target_note?: string | null
+}
+
+export interface GoalUpdateRequest {
+  title?: string
+  body?: string
+  horizon?: GoalHorizon
+  target_date?: string | null
+  target_note?: string | null
 }
 
 export interface ChatSessionItem {
@@ -439,6 +469,42 @@ export function createLog(payload: CreateLogRequest): Promise<LogItem> {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export function archiveLog(logId: string): Promise<LogItem> {
+  return apiFetch<LogItem>(`/modules/logs/${logId}/archive`, { method: 'POST' })
+}
+
+export function deleteLog(logId: string): Promise<void> {
+  return apiFetch<void>(`/modules/logs/${logId}`, { method: 'DELETE' })
+}
+
+export function listGoals(): Promise<GoalItem[]> {
+  return apiFetch<GoalItem[]>('/user-model/goals')
+}
+
+export function createGoal(payload: GoalCreateRequest): Promise<GoalItem> {
+  return apiFetch<GoalItem>('/user-model/goals', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateGoal(goalId: string, payload: GoalUpdateRequest): Promise<GoalItem> {
+  return apiFetch<GoalItem>(`/user-model/goals/${encodeURIComponent(goalId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function promoteGoal(goalId: string): Promise<GoalItem> {
+  return apiFetch<GoalItem>(`/user-model/goals/${encodeURIComponent(goalId)}/promote`, {
+    method: 'POST',
+  })
+}
+
+export function deleteGoal(goalId: string): Promise<void> {
+  return apiFetch<void>(`/user-model/goals/${encodeURIComponent(goalId)}`, { method: 'DELETE' })
 }
 
 export function fetchTasks(status: 'active' | 'completed' | null = 'active'): Promise<TaskItem[]> {
