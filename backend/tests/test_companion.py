@@ -1,6 +1,29 @@
 from __future__ import annotations
 
 from app.db import connect, ensure_schema
+from app.modules import sync_module_registry
+from app.modules.companion import build_persona_prompt
+from app.user_model import ensure_goals_seed, ensure_story_buckets
+
+
+def _ready_companion(tmp_path) -> None:
+    ensure_schema()
+    sync_module_registry()
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM life_items li
+                USING module_instances mi
+                WHERE li.module_instance_id = mi.id
+                    AND mi.module_id = 'curious'
+                """
+            )
+        conn.commit()
+    with connect() as conn:
+        ensure_story_buckets(tmp_path, conn)
+        conn.commit()
+    ensure_goals_seed(tmp_path)
 
 
 def test_companion_messages_table_exists() -> None:
@@ -33,3 +56,79 @@ def test_curious_module_has_companion_defaults() -> None:
     assert settings["companion_persona_preset"] == "warm"
     assert settings["companion_persona_override"] == ""
     assert settings["companion_checkins_per_day"] == 0
+
+
+def test_persona_prompt_includes_preset_and_override() -> None:
+    prompt = build_persona_prompt(preset="coach", override="Call me by my first name.")
+    assert "coach" in prompt.lower() or "push" in prompt.lower()
+    assert "Call me by my first name." in prompt
+
+
+def test_persona_prompt_unknown_preset_falls_back_to_warm() -> None:
+    prompt = build_persona_prompt(preset="nonsense", override="")
+    assert prompt
+    assert "warm" in prompt.lower() or "encourag" in prompt.lower()
+
+
+def test_companion_session_is_stable(tmp_path) -> None:
+    from app.modules.companion import get_or_create_companion_session
+
+    _ready_companion(tmp_path)
+    first = get_or_create_companion_session()
+    second = get_or_create_companion_session()
+    assert first["id"] == second["id"]
+    assert first["payload"]["session_type"] == "companion"
+
+
+def test_meaningfulness_gate_skips_filler() -> None:
+    from app.modules.companion import is_meaningful_reply
+
+    assert is_meaningful_reply("ok") is False
+    assert is_meaningful_reply("thanks!") is False
+    assert is_meaningful_reply("My EAD card was approved today") is True
+
+
+def test_meaningfulness_gate_uses_llm_when_available(monkeypatch) -> None:
+    import app.modules.companion as companion
+
+    monkeypatch.setattr(companion, "generate_json", lambda *a, **k: {"meaningful": True})
+    assert companion.is_meaningful_reply("ok") is True
+
+
+def test_meaningful_user_turn_creates_capture_and_chunk(tmp_path) -> None:
+    from app.modules.companion import get_or_create_companion_session, record_user_turn
+
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+
+    record_user_turn(session["id"], "My EAD card was approved today")
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT role, content FROM companion_messages WHERE session_id = %s",
+                (session["id"],),
+            )
+            messages = cur.fetchall()
+            cur.execute(
+                "SELECT COUNT(*) AS c FROM life_items WHERE item_type = 'curious_capture'"
+            )
+            captures = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM knowledge_chunks")
+            chunks = cur.fetchone()["c"]
+
+    assert any(m["role"] == "user" and "EAD" in m["content"] for m in messages)
+    assert captures == 1
+    assert chunks >= 1
+
+
+def test_filler_user_turn_records_message_but_no_capture(tmp_path) -> None:
+    from app.modules.companion import get_or_create_companion_session, record_user_turn
+
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+    record_user_turn(session["id"], "thanks!")
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM life_items WHERE item_type = 'curious_capture'")
+            assert cur.fetchone()["c"] == 0
