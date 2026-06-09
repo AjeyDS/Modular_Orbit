@@ -733,8 +733,12 @@ def _chat_system_prompt(mode: ChatMode) -> str:
     )
     base = (
         "You are Orbit, a personal AI advisor for one person. Be concise, grounded, "
-        "and useful. Use the provided Story Buckets, Goals, module data, Connections, "
-        "and Knowledge Chunks only as context; do not invent private facts. "
+        "and useful. The provided Story Buckets, Goals, module data, Connections, "
+        "and Knowledge Chunks are the source of truth for facts ABOUT THE PERSON — "
+        "never invent or guess personal facts. You MAY and SHOULD contribute general "
+        "world knowledge, opinions, and gap analysis (skills, learning paths, what's "
+        "commonly needed for the person's goals), framed clearly as suggestions, "
+        "never as facts about the person. "
         f"{formatting} "
         "Render values in plain, natural language. Do not echo raw field names or status "
         "codes verbatim (e.g. 'Admit Until Date: D/S'); translate them ('admitted for "

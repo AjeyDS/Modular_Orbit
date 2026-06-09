@@ -273,6 +273,14 @@ def test_prompt_discourages_raw_field_labels() -> None:
     assert "plain" in prompt or "raw field" in prompt or "verbatim" in prompt
 
 
+def test_prompt_allows_advice_but_guards_personal_facts() -> None:
+    from app.chat.actions import _chat_system_prompt
+
+    prompt = _chat_system_prompt("understanding").lower()
+    assert "never invent" in prompt or "do not invent" in prompt
+    assert "general" in prompt and ("suggest" in prompt or "gap" in prompt)
+
+
 def test_chat_mode_accepts_two_modes(tmp_path) -> None:
     _ready(tmp_path)
     fast = respond_to_chat(ChatRequest(session_id=_session_id("fast"), mode="fast", message="hi there orbit"))
