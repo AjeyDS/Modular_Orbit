@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import fastapi
 from psycopg import Connection
 
 from app.db import connect, transaction
 from app.llm import LLMUnavailable, generate_text
 from app.user_model.facts import list_unwoven_facts
+
+_WEAVE_LOCK_KEY = 778899001
 
 SECTION_TEMPLATE = (
     "# Identity\n\n# Work & Career\n\n# Personal Life\n\n"
@@ -62,22 +65,21 @@ def _llm_weave(doc: str, facts: list[dict]) -> str:
     ).strip()
 
 
-def weave_user_model(conn: Connection | None = None) -> dict[str, Any] | None:
-    if conn is None:
-        with transaction() as owned:
-            return weave_user_model(owned)
-    facts = list_unwoven_facts(conn)
-    if not facts:
-        return None
-    prev = current_woven_doc(conn)
-    base = prev["content"] if prev else SECTION_TEMPLATE
-    next_version = (prev["version"] + 1) if prev else 1
+def _synthesize(base: str, facts: list[dict]) -> str:
+    """Compute woven content via LLM, falling back to deterministic weave."""
     try:
         content = _llm_weave(base, facts)
         if not content:
             raise LLMUnavailable("empty weave")
     except (LLMUnavailable, Exception):
         content = _deterministic_weave(base, facts)
+    return content
+
+
+def _write_woven(conn: Connection, content: str, facts: list[dict]) -> dict[str, Any]:
+    """Insert a new woven version and mark the given facts woven, on the passed conn."""
+    prev = current_woven_doc(conn)
+    next_version = (prev["version"] + 1) if prev else 1
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) AS c FROM user_facts")
         total = cur.fetchone()["c"]
@@ -96,8 +98,52 @@ def weave_user_model(conn: Connection | None = None) -> dict[str, Any] | None:
     return woven
 
 
+def weave_user_model(conn: Connection | None = None) -> dict[str, Any] | None:
+    if conn is not None:
+        # Caller-managed transaction: caller owns serialization.
+        facts = list_unwoven_facts(conn)
+        if not facts:
+            return None
+        prev = current_woven_doc(conn)
+        base = prev["content"] if prev else SECTION_TEMPLATE
+        content = _synthesize(base, facts)
+        return _write_woven(conn, content, facts)
+
+    # Owned path: serialize concurrent weaves with a session-level advisory lock
+    # on a dedicated connection, and keep the LLM call OUT of the write transaction.
+    lock_conn = connect()
+    try:
+        with lock_conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (_WEAVE_LOCK_KEY,))
+        lock_conn.commit()  # connect() has no autocommit; release the lock's txn
+
+        with connect() as read_conn:
+            facts = list_unwoven_facts(read_conn)
+            if not facts:
+                return None
+            prev = current_woven_doc(read_conn)
+            base = prev["content"] if prev else SECTION_TEMPLATE
+
+        # LLM synthesis happens with NO write transaction open.
+        content = _synthesize(base, facts)
+
+        with transaction() as write_conn:
+            return _write_woven(write_conn, content, facts)
+    finally:
+        with lock_conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (_WEAVE_LOCK_KEY,))
+        lock_conn.commit()
+        lock_conn.close()
+
+
 def should_weave(conn: Connection | None = None) -> bool:
     from app.user_model.facts import unwoven_budget
 
     count, chars = unwoven_budget(conn)
     return count >= WEAVE_FACT_THRESHOLD or chars >= WEAVE_CHAR_THRESHOLD
+
+
+def schedule_weave_if_needed(background_tasks: fastapi.BackgroundTasks) -> None:
+    """If the unwoven tail has crossed the threshold, schedule a weave to run after the response."""
+    if should_weave():
+        background_tasks.add_task(weave_user_model)

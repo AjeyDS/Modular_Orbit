@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -13,6 +13,7 @@ from app.user_model import (
     StoryBucketItem,
     StoryBucketUpdate,
     create_goal,
+    current_woven_doc,
     delete_goal,
     get_story_bucket_item,
     list_goals,
@@ -20,6 +21,7 @@ from app.user_model import (
     promote_goal,
     update_goal,
     update_story_bucket_item,
+    weave_user_model,
 )
 
 
@@ -57,7 +59,30 @@ class GoalUpdate(BaseModel):
     target_note: str | None = None
 
 
+class WovenDocResponse(BaseModel):
+    version: int
+    content: str
+    fact_count_at_weave: int
+    woven_at: datetime
+
+
 router = APIRouter(prefix="/user-model", tags=["user-model"])
+
+
+@router.get("/doc", response_model=WovenDocResponse)
+def get_woven_doc_endpoint() -> Response | WovenDocResponse:
+    doc = current_woven_doc()
+    if doc is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return WovenDocResponse(**doc)
+
+
+@router.post("/reweave", response_model=WovenDocResponse)
+def reweave_endpoint() -> Response | WovenDocResponse:
+    doc = weave_user_model()
+    if doc is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return WovenDocResponse(**doc)
 
 
 @router.get("/buckets", response_model=list[StoryBucketItem])

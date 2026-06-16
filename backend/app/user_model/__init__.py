@@ -32,6 +32,7 @@ from app.user_model.weave import (
     WEAVE_CHAR_THRESHOLD,
     WEAVE_FACT_THRESHOLD,
     current_woven_doc,
+    schedule_weave_if_needed,
     should_weave,
     weave_user_model,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "mark_story_bucket_user_edited",
     "promote_goal",
     "rename_story_bucket",
+    "schedule_weave_if_needed",
     "should_weave",
     "unwoven_budget",
     "update_goal",
