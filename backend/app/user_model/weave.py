@@ -1,6 +1,7 @@
 """Synthesize unwoven facts into the single woven User Model document."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import fastapi
@@ -9,6 +10,8 @@ from psycopg import Connection
 from app.db import connect, transaction
 from app.llm import LLMUnavailable, generate_text
 from app.user_model.facts import list_unwoven_facts
+
+logger = logging.getLogger(__name__)
 
 _WEAVE_LOCK_KEY = 778899001
 
@@ -143,7 +146,15 @@ def should_weave(conn: Connection | None = None) -> bool:
     return count >= WEAVE_FACT_THRESHOLD or chars >= WEAVE_CHAR_THRESHOLD
 
 
+def _weave_best_effort() -> None:
+    """Run a weave as a background task; never let a failure escape into the ASGI stack."""
+    try:
+        weave_user_model()
+    except Exception:
+        logger.warning("Background weave failed", exc_info=True)
+
+
 def schedule_weave_if_needed(background_tasks: fastapi.BackgroundTasks) -> None:
     """If the unwoven tail has crossed the threshold, schedule a weave to run after the response."""
     if should_weave():
-        background_tasks.add_task(weave_user_model)
+        background_tasks.add_task(_weave_best_effort)
