@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.db import transaction
 from app.lifecycle import LifeItemError
 from app.llm import LLMUnavailable, generate_text
-from app.user_model import list_goals
+from app.user_model import build_user_model_context, list_goals
 
 
 class ConnectedContext(BaseModel):
@@ -205,15 +205,8 @@ def _hydrate_connection(connection: dict[str, Any], *, root: Path | None) -> Con
     )
 
 
-def _get_connected_bucket_text(bucket_id: str) -> str:
-    with transaction() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT file_path FROM story_buckets WHERE id = %s", (bucket_id,))
-            row = cur.fetchone()
-            if row is None:
-                return ""
-            path = Path(row["file_path"])
-            return path.read_text(encoding="utf-8") if path.exists() else ""
+def _get_connected_bucket_text(_bucket_id: str) -> str:
+    return build_user_model_context(budget=1400)
 
 
 def _get_connected_goal(goal_id: str, *, root: Path | None) -> str:

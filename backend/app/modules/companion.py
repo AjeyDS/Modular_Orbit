@@ -21,7 +21,7 @@ from app.modules.curious import (
     weave_pending_curious_updates,
 )
 from app.modules.logs import LogCreate, create_log
-from app.user_model import list_goals
+from app.user_model import build_user_model_context, list_goals
 
 logger = logging.getLogger(__name__)
 
@@ -228,15 +228,6 @@ def build_companion_context() -> str:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT stable_key, display_name, description, content
-                FROM story_buckets
-                WHERE status = 'active'
-                ORDER BY display_name
-                """
-            )
-            bucket_rows = cur.fetchall()
-            cur.execute(
-                """
                 SELECT title
                 FROM life_items
                 WHERE item_type IN ('task', 'plan')
@@ -271,12 +262,9 @@ def build_companion_context() -> str:
             )
             recent_rows = cur.fetchall()
 
-    if bucket_rows:
-        lines = []
-        for row in bucket_rows:
-            content = (row.get("content") or "")[:400].strip()
-            lines.append(f"- {row['display_name']}: {row['description']}\n{content}")
-        sections.append("Story Buckets:\n" + "\n".join(lines))
+    user_model = build_user_model_context(budget=1800)
+    if user_model.strip():
+        sections.append("User model:\n" + user_model)
 
     goals = list_goals()
     if goals:

@@ -361,13 +361,10 @@ def _row_to_document(row: dict[str, Any]) -> DocumentItem:
 
 
 def _annotate_document(content: str, *, summary: str) -> tuple[str, str, str]:
-    from app.user_model import list_goals, list_story_bucket_items
+    from app.user_model import build_user_model_context, list_goals
 
     context = {
-        "story_buckets": [
-            {"name": bucket.display_name, "description": bucket.description, "content": bucket.content[:500]}
-            for bucket in list_story_bucket_items()
-        ],
+        "user_model": build_user_model_context(budget=1500),
         "active_goals": [{"title": goal.title, "body": goal.body[:300]} for goal in list_goals() if goal.status == "active"],
     }
     try:
@@ -375,7 +372,7 @@ def _annotate_document(content: str, *, summary: str) -> tuple[str, str, str]:
             _annotation_prompt(content[:4000], context),
             system=(
                 "You categorize a personal document and explain in one sentence how it connects "
-                "to the person, using their story buckets and goals. Return only JSON: "
+                "to the person, using their user model and goals. Return only JSON: "
                 '{"category_tag": str, "connection_summary": str}.'
             ),
             temperature=0.2,

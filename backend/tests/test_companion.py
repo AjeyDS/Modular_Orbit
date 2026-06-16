@@ -165,12 +165,16 @@ def test_context_includes_recent_activity(tmp_path) -> None:
     assert "OPT" in ctx
 
 
-def test_companion_context_includes_buckets_and_goals(tmp_path) -> None:
+def test_companion_context_includes_user_model_and_goals(tmp_path) -> None:
     from app.modules.companion import build_companion_context
+    from app.user_model import capture_fact, weave_user_model
 
     _ready_companion(tmp_path)
+    capture_fact(source="manual", text="I am exploring a move into product management")
+    weave_user_model()
     ctx = build_companion_context()
-    assert "Story Buckets" in ctx or "buckets" in ctx.lower()
+    assert "User model:" in ctx
+    assert "product management" in ctx
     assert isinstance(ctx, str) and ctx.strip()
 
 

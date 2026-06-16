@@ -27,7 +27,7 @@ from app.lifecycle import (
 )
 from app.llm import LLMUnavailable, generate_json
 from app.rag import retrieve_chunks
-from app.user_model import list_goals, list_story_bucket_items
+from app.user_model import build_user_model_context, list_goals
 
 DueWindow = Literal["this_week", "this_month", "someday", "exact"]
 
@@ -517,15 +517,6 @@ def _task_priority_context_summary() -> dict[str, Any]:
         for goal in list_goals()
         if goal.status == "active"
     ]
-    buckets = [
-        {
-            "id": str(bucket.id),
-            "name": bucket.display_name,
-            "description": bucket.description,
-            "content": bucket.content[:1400],
-        }
-        for bucket in list_story_bucket_items()
-    ]
     recent_logs = _recent_life_items("logs", limit=5)
     recent_plans = _recent_life_items("plans", limit=5)
     chunks = [
@@ -540,7 +531,7 @@ def _task_priority_context_summary() -> dict[str, Any]:
     ]
     return {
         "active_goals": goals,
-        "story_buckets": buckets,
+        "user_model": build_user_model_context(budget=1800),
         "recent_logs": recent_logs,
         "recent_plans": recent_plans,
         "relevant_chunks": chunks,

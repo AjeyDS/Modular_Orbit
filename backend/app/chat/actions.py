@@ -19,7 +19,7 @@ from app.modules.plans import PlanCreate, PlanStepCreate, create_plan
 from app.modules.tasks import TaskCreate, create_task
 from app.user_model.goals import create_goal
 from app.rag import retrieve_chunks
-from app.user_model import list_goals
+from app.user_model import build_user_model_context, list_goals
 
 
 ChatMode = Literal["fast", "understanding"]
@@ -973,33 +973,15 @@ def _build_understanding_context(
         chunk_block,
         structured,
         _connection_context(message),
-        _selected_bucket_context(decision.buckets),
+        _user_model_block(),
         _goal_context(),
     ]
     return "\n\n".join(s for s in sections if s.strip()) or "No Orbit context found yet."
 
 
-def _selected_bucket_context(keys: list[str]) -> str:
-    if not keys:
-        return ""
-    with transaction() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT display_name, description, content
-                FROM story_buckets
-                WHERE status='active' AND stable_key = ANY(%s)
-                """,
-                (keys,),
-            )
-            rows = cur.fetchall()
-    if not rows:
-        return ""
-    lines = [
-        f"- {r['display_name']}: {r['description']}\n{(r.get('content') or '')[:1400].strip()}"
-        for r in rows
-    ]
-    return "Story Buckets:\n" + "\n".join(lines)
+def _user_model_block() -> str:
+    ctx = build_user_model_context(budget=2000)
+    return "User model:\n" + ctx if ctx.strip() else ""
 
 
 def _goal_context() -> str:
