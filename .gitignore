@@ -6,3 +6,6 @@ __pycache__/
 node_modules/
 dist/
 
+
+# Personal user-model content — never commit
+user_model/
