@@ -93,6 +93,61 @@ def test_reweave_endpoint_weaves_and_clears_facts():
     assert client.post("/user-model/reweave").status_code == 204
 
 
+def test_post_note_creates_high_salience_manual_fact():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.post("/user-model/notes", json={"text": "Prefers async standups."})
+    assert response.status_code == 201
+    body = response.json()
+    assert body["source"] == "manual"
+    assert body["salience"] == "high"
+    assert body["text"] == "Prefers async standups."
+    assert body["woven"] is False
+
+    # It appears in GET /facts.
+    facts = client.get("/user-model/facts").json()
+    assert any(f["text"] == "Prefers async standups." for f in facts)
+
+
+def test_post_note_rejects_empty_text():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    assert client.post("/user-model/notes", json={"text": ""}).status_code == 422
+
+
+def test_get_facts_newest_first_and_respects_limit():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    for i in range(5):
+        capture_fact(source="manual", text=f"ordered fact {i}")
+
+    facts = client.get("/user-model/facts?limit=3").json()
+    assert len(facts) == 3
+    # Newest-first: the last captured fact comes first.
+    assert facts[0]["text"] == "ordered fact 4"
+    assert facts[1]["text"] == "ordered fact 3"
+    assert facts[2]["text"] == "ordered fact 2"
+
+
+def test_get_facts_validates_limit_bounds():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    assert client.get("/user-model/facts?limit=0").status_code == 422
+    assert client.get("/user-model/facts?limit=101").status_code == 422
+
+
 def test_get_doc_endpoint_204_then_200():
     from fastapi.testclient import TestClient
 

@@ -1,9 +1,28 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Save, ShieldCheck } from 'lucide-react'
-import { fetchStoryBuckets, updateStoryBucket, type StoryBucketItem } from '../lib/api'
+import { RefreshCw, Save, ShieldCheck } from 'lucide-react'
+import {
+  addUserNote,
+  fetchStoryBuckets,
+  fetchUserFacts,
+  fetchWovenDoc,
+  reweaveUserModel,
+  updateStoryBucket,
+  type StoryBucketItem,
+  type UserFact,
+  type WovenDoc,
+} from '../lib/api'
+import { Markdown } from '../components/Markdown'
 import { pageContentClass } from '../layout/pageShell'
 
 export default function UserModelPage() {
+  const [doc, setDoc] = useState<WovenDoc | null>(null)
+  const [facts, setFacts] = useState<UserFact[]>([])
+  const [noteDraft, setNoteDraft] = useState('')
+  const [docLoading, setDocLoading] = useState(true)
+  const [reweaving, setReweaving] = useState(false)
+  const [addingNote, setAddingNote] = useState(false)
+  const [wovenStatus, setWovenStatus] = useState('')
+
   const [buckets, setBuckets] = useState<StoryBucketItem[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
@@ -32,7 +51,66 @@ export default function UserModelPage() {
     }
   }
 
+  async function loadWovenModel() {
+    setDocLoading(true)
+    try {
+      const [nextDoc, nextFacts] = await Promise.all([fetchWovenDoc(), fetchUserFacts(20)])
+      setDoc(nextDoc)
+      setFacts(nextFacts)
+    } catch (err) {
+      setWovenStatus(err instanceof Error ? err.message : 'Unable to load woven model')
+    } finally {
+      setDocLoading(false)
+    }
+  }
+
+  async function refreshFacts() {
+    try {
+      setFacts(await fetchUserFacts(20))
+    } catch {
+      // Non-fatal; keep the prior list.
+    }
+  }
+
+  async function reweave() {
+    if (reweaving) return
+    setReweaving(true)
+    setWovenStatus('Re-weaving the model...')
+    try {
+      const next = await reweaveUserModel()
+      if (next) {
+        setDoc(next)
+        setWovenStatus(`Re-wove version ${next.version}.`)
+      } else {
+        setWovenStatus('Nothing new to weave yet.')
+      }
+      await refreshFacts()
+    } catch (err) {
+      setWovenStatus(err instanceof Error ? err.message : 'Unable to re-weave')
+    } finally {
+      setReweaving(false)
+    }
+  }
+
+  async function addNote() {
+    const text = noteDraft.trim()
+    if (!text || addingNote) return
+    setAddingNote(true)
+    setWovenStatus('Adding note...')
+    try {
+      await addUserNote(text)
+      setNoteDraft('')
+      setWovenStatus('Note captured. It will weave into the model on the next re-weave.')
+      await refreshFacts()
+    } catch (err) {
+      setWovenStatus(err instanceof Error ? err.message : 'Unable to add note')
+    } finally {
+      setAddingNote(false)
+    }
+  }
+
   useEffect(() => {
+    void loadWovenModel()
     void loadBuckets()
   }, [])
 
@@ -82,7 +160,106 @@ export default function UserModelPage() {
           <Card>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <h2 className="text-[16px] font-semibold text-gray-900 dark:text-gray-100">Story Buckets</h2>
+                <h2 className="text-[16px] font-semibold text-gray-900 dark:text-gray-100">Woven User Model</h2>
+                <p className="mt-1 text-[13px] leading-6 text-gray-500 dark:text-gray-400">
+                  Orbit weaves your captured facts and notes into a single living document.
+                  {doc && (
+                    <span className="ml-1 text-gray-400">
+                      Version {doc.version} · woven {new Date(doc.woven_at).toLocaleString()}
+                    </span>
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={reweaving}
+                onClick={() => void reweave()}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-[13px] font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40"
+              >
+                <RefreshCw size={14} className={reweaving ? 'animate-spin' : undefined} />
+                {reweaving ? 'Re-weaving...' : 'Re-weave now'}
+              </button>
+            </div>
+            {wovenStatus && (
+              <p className="mt-3 rounded-lg border border-gray-200 bg-gray-50/70 px-3 py-2 text-[12px] text-gray-600 dark:border-gray-800 dark:bg-[#18181A] dark:text-gray-400">
+                {wovenStatus}
+              </p>
+            )}
+
+            <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50/50 p-4 text-[13px] leading-6 text-gray-700 dark:border-gray-800 dark:bg-[#18181A] dark:text-gray-300">
+              {docLoading ? (
+                <p className="text-center text-gray-400">Loading woven model...</p>
+              ) : doc ? (
+                <Markdown>{doc.content}</Markdown>
+              ) : (
+                <p className="text-gray-400">
+                  No woven model yet — add a note or capture activity, then re-weave.
+                </p>
+              )}
+            </div>
+          </Card>
+
+          <Card>
+            <h2 className="text-[16px] font-semibold text-gray-900 dark:text-gray-100">Add note</h2>
+            <p className="mt-1 text-[13px] leading-6 text-gray-500 dark:text-gray-400">
+              Capture a fact about yourself. Notes are saved as high-salience facts and merged on the next re-weave.
+            </p>
+            <textarea
+              value={noteDraft}
+              onChange={(event) => setNoteDraft(event.target.value)}
+              rows={3}
+              placeholder="e.g. I prefer deep-work blocks in the morning."
+              className="mt-3 w-full resize-y rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[14px] leading-6 text-gray-700 outline-none transition-colors focus:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-200 dark:focus:border-gray-600"
+            />
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                disabled={!noteDraft.trim() || addingNote}
+                onClick={() => void addNote()}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-[13px] font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40"
+              >
+                {addingNote ? 'Adding...' : 'Add note'}
+              </button>
+            </div>
+          </Card>
+
+          <Card>
+            <h2 className="text-[16px] font-semibold text-gray-900 dark:text-gray-100">Recently captured</h2>
+            <p className="mt-1 text-[13px] leading-6 text-gray-500 dark:text-gray-400">
+              The latest facts feeding your model.
+            </p>
+            {facts.length === 0 ? (
+              <p className="mt-4 text-[13px] text-gray-400">No facts captured yet.</p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {facts.map((fact) => (
+                  <li
+                    key={fact.id}
+                    className="flex items-start justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2 dark:border-gray-800 dark:bg-[#18181A]"
+                  >
+                    <div className="min-w-0">
+                      <span className="mr-2 inline-block rounded bg-gray-200 px-1.5 py-0.5 align-middle text-[10px] font-medium uppercase tracking-wider text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                        {fact.source}
+                      </span>
+                      <span className="text-[13px] leading-6 text-gray-700 dark:text-gray-200">{fact.text}</span>
+                    </div>
+                    <span
+                      className={`mt-0.5 shrink-0 text-[11px] font-medium ${
+                        fact.woven ? 'text-green-500' : 'text-amber-500'
+                      }`}
+                    >
+                      {fact.woven ? 'woven' : 'pending'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-[16px] font-semibold text-gray-900 dark:text-gray-100">Story Buckets (legacy)</h2>
                 <p className="mt-1 text-[13px] leading-6 text-gray-500 dark:text-gray-400">
                   Story Buckets are Orbit's editable understanding of you. Edits update the markdown files directly and protect the section from automatic rewrites.
                 </p>

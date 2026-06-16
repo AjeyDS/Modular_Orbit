@@ -429,6 +429,22 @@ export interface StoryBucketItem {
   updated_at: string
 }
 
+export interface WovenDoc {
+  version: number
+  content: string
+  fact_count_at_weave: number
+  woven_at: string
+}
+
+export interface UserFact {
+  id: string
+  source: string
+  text: string
+  salience: string
+  woven: boolean
+  created_at: string
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   let lastError = 'Network request failed'
   const isFormData = init?.body instanceof FormData
@@ -938,6 +954,28 @@ export function sendCompanionEndBeacon(): boolean {
     return true
   }
   return false
+}
+
+export async function fetchWovenDoc(): Promise<WovenDoc | null> {
+  const doc = await apiFetch<WovenDoc | undefined>('/user-model/doc')
+  return doc ?? null
+}
+
+export async function reweaveUserModel(): Promise<WovenDoc | null> {
+  const doc = await apiFetch<WovenDoc | undefined>('/user-model/reweave', { method: 'POST' })
+  return doc ?? null
+}
+
+export function fetchUserFacts(limit?: number): Promise<UserFact[]> {
+  const query = limit ? `?limit=${limit}` : ''
+  return apiFetch<UserFact[]>(`/user-model/facts${query}`)
+}
+
+export function addUserNote(text: string): Promise<UserFact> {
+  return apiFetch<UserFact>('/user-model/notes', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
 }
 
 export function fetchStoryBuckets(): Promise<StoryBucketItem[]> {

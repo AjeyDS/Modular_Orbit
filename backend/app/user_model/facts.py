@@ -48,6 +48,18 @@ def list_unwoven_facts(conn: Connection | None = None) -> list[dict[str, Any]]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def list_recent_facts(limit: int = 20, conn: Connection | None = None) -> list[dict[str, Any]]:
+    if conn is None:
+        with connect() as owned:
+            return list_recent_facts(limit, owned)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM user_facts ORDER BY created_at DESC LIMIT %s",
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def unwoven_budget(conn: Connection | None = None) -> tuple[int, int]:
     """Return (count, total_chars) of unwoven facts — the weave trigger input."""
     facts = list_unwoven_facts(conn)

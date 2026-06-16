@@ -3,6 +3,7 @@
 from app.user_model.context import build_user_model_context
 from app.user_model.facts import (
     capture_fact,
+    list_recent_facts,
     list_unwoven_facts,
     unwoven_budget,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "ensure_story_buckets",
     "get_story_bucket_item",
     "list_goals",
+    "list_recent_facts",
     "list_story_bucket_items",
     "list_story_buckets",
     "list_unwoven_facts",
