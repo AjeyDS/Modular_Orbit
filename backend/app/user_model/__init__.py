@@ -1,5 +1,10 @@
 """Story Bucket and goal helpers for the User Model."""
 
+from app.user_model.facts import (
+    capture_fact,
+    list_unwoven_facts,
+    unwoven_budget,
+)
 from app.user_model.goals import (
     GoalEntry,
     create_goal,
@@ -28,6 +33,7 @@ __all__ = [
     "GoalEntry",
     "StoryBucketItem",
     "StoryBucketUpdate",
+    "capture_fact",
     "create_goal",
     "create_story_bucket",
     "delete_goal",
@@ -37,9 +43,11 @@ __all__ = [
     "list_goals",
     "list_story_bucket_items",
     "list_story_buckets",
+    "list_unwoven_facts",
     "mark_story_bucket_user_edited",
     "promote_goal",
     "rename_story_bucket",
+    "unwoven_budget",
     "update_goal",
     "update_story_bucket_item",
 ]
