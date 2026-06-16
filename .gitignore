@@ -7,5 +7,6 @@ node_modules/
 dist/
 
 
-# Personal user-model content — never commit
-user_model/
+# Personal user-model content — never commit (repo-root dir only,
+# NOT the backend/app/user_model source package)
+/user_model/
