@@ -156,6 +156,41 @@ A manual **"re-weave now"** action triggers the same path on demand.
   high-salience facts always reflected.
 - Migration: 7 buckets produce a sensible initial woven doc.
 
+## Reconciliation with existing machinery
+
+This is an **evolution** of machinery that already exists, not greenfield:
+
+- `bucket_updates` (`lifecycle/derived.py::write_bucket_updates`) already turns
+  life-item events into per-bucket pending "facts" via Connection Review. Our
+  `user_facts` stream generalizes this into one unified, source-tagged stream.
+- `lifecycle/story_weave.py::weave_story_bucket()` already weaves pending
+  `bucket_updates` into a bucket's `content` — but it is a **deterministic v0**
+  that *appends bullet markdown* per bucket (no LLM synthesis), gated by a 7-day
+  User Edit Lock, triggered inline or via `POST /api/story-weave/...`. Our
+  `weave_user_model()` replaces this with **one LLM-synthesized document**.
+- Execution today is **inline/synchronous** (`process_lifecycle_for_item`); there
+  is no background worker. "Background weave" is therefore a *new* capability —
+  see the execution note below.
+- `capture_proposals` (chat → previewed life items) is a separate concern and is
+  **unaffected**.
+
+**Build-vs-reuse decision:** add new `user_facts` + `user_model_weave` tables and
+a new LLM `weave_user_model()`. Leave the legacy per-bucket `bucket_updates` /
+`story_weave` path in place but **unwired** from the feed (a later task removes
+it once the woven model is trusted). This avoids entangling the new single-doc
+weave with the old bullet-append logic.
+
+**Background execution note:** since there is no worker, v1 runs the threshold
+weave via FastAPI `BackgroundTasks` (fire-and-forget after the request that
+tipped the threshold). The weave function is idempotent and safe to also call
+from a manual "re-weave now" endpoint and from a future scheduler.
+
+**LLM-in-tests note:** `llm_enabled()` is `False` under pytest, so
+`weave_user_model()` must fall back to a deterministic synthesis (append facts
+under their sections) when `LLMUnavailable` is raised. Tests assert on threshold
+firing, fact `woven` marking, version creation, and feed assembly — never on LLM
+prose.
+
 ## Out of scope (deferred)
 
 - Splitting the single file back into multiple files (explicitly future).
