@@ -357,7 +357,7 @@ def generate_task_priority_suggestion() -> TaskPrioritySuggestionState:
             _priority_prompt(active_tasks, context_summary),
             system=(
                 "You are Orbit's Tasks focus advisor. Rank active tasks by what the person "
-                "should focus on next using goals, story buckets, recent activity, and task details. "
+                "should focus on next using goals, the user model, recent activity, and task details. "
                 "Return only valid JSON with ranked and skippable arrays."
             ),
             temperature=0.2,
@@ -766,7 +766,7 @@ def _rewrite_task(title: str, description: str) -> tuple[str, str, str]:
         response = generate_json(
             _rewrite_prompt(title, description, context),
             system=(
-                "You reorganize a freshly captured task using the person's goals and story buckets. "
+                "You reorganize a freshly captured task using the person's goals and user model. "
                 "Produce a short, clean imperative title and an organized body. Return only JSON: "
                 '{"title": str, "description": str}.'
             ),
