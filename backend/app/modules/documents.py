@@ -454,7 +454,7 @@ def _write_document_bucket_updates(
     if not bucket_keys or not text.strip():
         return
 
-    woven_bucket_ids: list[UUID] = []
+    updated_bucket_ids: list[UUID] = []
     with transaction() as conn:
         with conn.cursor() as cur:
             for bucket_key in bucket_keys:
@@ -483,8 +483,8 @@ def _write_document_bucket_updates(
                         Jsonb({"source": "documents", "bucket_key": bucket_key}),
                     ),
                 )
-                woven_bucket_ids.append(bucket["id"])
-            if woven_bucket_ids:
+                updated_bucket_ids.append(bucket["id"])
+            if updated_bucket_ids:
                 cur.execute(
                     """
                     UPDATE life_items
