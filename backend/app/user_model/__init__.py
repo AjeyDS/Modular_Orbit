@@ -27,15 +27,27 @@ from app.user_model.story_buckets import (
     rename_story_bucket,
     update_story_bucket_item,
 )
+from app.user_model.weave import (
+    SECTION_TEMPLATE,
+    WEAVE_CHAR_THRESHOLD,
+    WEAVE_FACT_THRESHOLD,
+    current_woven_doc,
+    should_weave,
+    weave_user_model,
+)
 
 __all__ = [
     "DEFAULT_STORY_BUCKETS",
     "GoalEntry",
+    "SECTION_TEMPLATE",
     "StoryBucketItem",
     "StoryBucketUpdate",
+    "WEAVE_CHAR_THRESHOLD",
+    "WEAVE_FACT_THRESHOLD",
     "capture_fact",
     "create_goal",
     "create_story_bucket",
+    "current_woven_doc",
     "delete_goal",
     "ensure_goals_seed",
     "ensure_story_buckets",
@@ -47,7 +59,9 @@ __all__ = [
     "mark_story_bucket_user_edited",
     "promote_goal",
     "rename_story_bucket",
+    "should_weave",
     "unwoven_budget",
     "update_goal",
     "update_story_bucket_item",
+    "weave_user_model",
 ]
