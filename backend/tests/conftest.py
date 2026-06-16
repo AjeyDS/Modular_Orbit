@@ -30,6 +30,7 @@ def _truncate_mutable_tables() -> None:
                 TRUNCATE TABLE
                     user_facts,
                     user_model_weave,
+                    story_buckets,
                     generated_outputs,
                     goals,
                     capture_proposals,
