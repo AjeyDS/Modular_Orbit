@@ -6,6 +6,7 @@ from app.user_model.facts import (
     list_unwoven_facts,
     unwoven_budget,
 )
+from app.user_model.migrate import seed_woven_user_model
 from app.user_model.goals import (
     GoalEntry,
     create_goal,
@@ -63,6 +64,7 @@ __all__ = [
     "promote_goal",
     "rename_story_bucket",
     "schedule_weave_if_needed",
+    "seed_woven_user_model",
     "should_weave",
     "unwoven_budget",
     "update_goal",
