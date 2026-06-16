@@ -35,6 +35,9 @@ def _capture_life_item_fact(item: dict[str, Any], verb: str) -> None:
     title = (item.get("title") or "").strip()
     if not title:
         return
+    source = item.get("source")
+    if isinstance(source, Mapping) and source.get("kind") == "companion_capture":
+        return
     kind = item.get("item_type") or "item"
     try:
         # Local import avoids a module-load cycle (user_model imports app.db, not lifecycle).

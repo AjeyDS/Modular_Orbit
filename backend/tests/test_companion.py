@@ -501,3 +501,42 @@ def test_gate_rejects_vague_status_keeps_real_update() -> None:
     assert is_meaningful_reply("its going good") is False
     assert is_meaningful_reply("fine") is False
     assert is_meaningful_reply("My EAD card was approved today") is True
+
+
+def test_meaningful_turn_captures_one_companion_fact_no_double_capture(tmp_path) -> None:
+    from app.user_model import list_unwoven_facts
+
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+    answer = "My EAD card was approved today"
+    record_user_turn(session["id"], answer)
+
+    facts = list_unwoven_facts()
+    companion_facts = [f for f in facts if f["source"] == "companion" and answer in f["text"]]
+    assert len(companion_facts) == 1
+
+    # No life_item fact should reference the internal companion-capture log.
+    life_item_facts = [f for f in facts if f["source"] == "life_item" and answer in f["text"]]
+    assert life_item_facts == []
+
+
+def test_non_meaningful_turn_captures_no_companion_fact(tmp_path) -> None:
+    from app.user_model import list_unwoven_facts
+
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+    record_user_turn(session["id"], "thanks!")
+
+    facts = list_unwoven_facts()
+    assert [f for f in facts if f["source"] == "companion"] == []
+
+
+def test_capture_false_turn_captures_no_companion_fact(tmp_path) -> None:
+    from app.user_model import list_unwoven_facts
+
+    _ready_companion(tmp_path)
+    session = get_or_create_companion_session()
+    record_user_turn(session["id"], "My EAD card was approved today", capture=False)
+
+    facts = list_unwoven_facts()
+    assert [f for f in facts if f["source"] == "companion"] == []

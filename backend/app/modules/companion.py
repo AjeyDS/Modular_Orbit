@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -21,6 +22,8 @@ from app.modules.curious import (
 )
 from app.modules.logs import LogCreate, create_log
 from app.user_model import list_goals
+
+logger = logging.getLogger(__name__)
 
 
 class CompanionMessage(BaseModel):
@@ -203,6 +206,19 @@ def record_user_turn(
                 """,
                 (log.id,),
             )
+
+    # Capture the raw answer as a companion fact (best-effort, post-commit). The
+    # companion-capture log above no longer emits its own life_item fact, so this
+    # is the single fact for this meaningful reply.
+    try:
+        from app.user_model import capture_fact
+        capture_fact(
+            source="companion",
+            text=text,
+            ref={"session_id": str(session_id), "message_id": str(message_id)},
+        )
+    except Exception:
+        logger.warning("Failed to capture companion fact for session %s", session_id, exc_info=True)
 
 
 def build_companion_context() -> str:
