@@ -128,7 +128,6 @@ def create_document(
         if review:
             process_lifecycle_for_item(result.item["id"], root=review_root)
             _set_document_bucket_update_text(result.item["id"], connection_summary)
-            _auto_weave_connected_buckets(result.item["id"])
         bucket_keys = _route_document_buckets(payload.content, summary)
         if bucket_keys:
             _write_document_bucket_updates(
@@ -495,36 +494,6 @@ def _write_document_bucket_updates(
                     """,
                     (life_item_id,),
                 )
-
-    from app.lifecycle.story_weave import StoryWeaveError, weave_story_bucket
-
-    for bucket_id in woven_bucket_ids:
-        try:
-            weave_story_bucket(bucket_id)
-        except StoryWeaveError:
-            continue
-
-
-def _auto_weave_connected_buckets(life_item_id: UUID) -> None:
-    from app.lifecycle.story_weave import StoryWeaveError, weave_story_bucket
-
-    with transaction() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT target_id::uuid AS bucket_id
-                FROM item_connections
-                WHERE source_life_item_id = %s AND target_type = 'story_bucket'
-                """,
-                (life_item_id,),
-            )
-            bucket_ids = [row["bucket_id"] for row in cur.fetchall()]
-
-    for bucket_id in bucket_ids:
-        try:
-            weave_story_bucket(bucket_id)
-        except StoryWeaveError:
-            continue
 
 
 def _set_document_bucket_update_text(life_item_id: UUID, connection_summary: str) -> None:

@@ -118,7 +118,10 @@ def test_update_document_annotation(tmp_path) -> None:
     remove_document(document.id)
 
 
-def test_create_document_auto_weaves_connected_buckets(tmp_path) -> None:
+def test_create_document_writes_pending_bucket_update_without_auto_weave(tmp_path) -> None:
+    # The legacy automatic per-bucket weave has been unwired. Creating a document
+    # still succeeds and records a pending bucket_update, but that update is NOT
+    # auto-woven into the bucket content (it stays 'pending' for the manual weave).
     document = create_document(
         DocumentCreate(
             original_name="career.md",
@@ -128,6 +131,8 @@ def test_create_document_auto_weaves_connected_buckets(tmp_path) -> None:
         review_root=tmp_path,
     )
 
+    assert document.id is not None
+
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -135,22 +140,8 @@ def test_create_document_auto_weaves_connected_buckets(tmp_path) -> None:
                 (document.id,),
             )
             pending = cur.fetchone()["n"]
-            cur.execute(
-                """
-                SELECT sb.content
-                FROM item_connections ic
-                JOIN story_buckets sb ON sb.id = ic.target_id::uuid
-                WHERE ic.source_life_item_id = %s
-                    AND ic.target_type = 'story_bucket'
-                LIMIT 1
-                """,
-                (document.id,),
-            )
-            row = cur.fetchone()
-            woven_content = row["content"] if row else ""
 
-    assert pending == 0
-    assert document.connection_summary in woven_content
+    assert pending >= 1
 
     remove_document(document.id)
 

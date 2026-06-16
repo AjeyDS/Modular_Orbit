@@ -489,18 +489,6 @@ def complete_onboarding_session(session_id: UUID | str) -> CuriousCompletion:
         set_lifecycle_status(session_id, "completed")
         _mark_session_completed(session_id)
 
-    target_bucket_ids = {
-        _bucket_by_key(answer.target_bucket_key)["id"]
-        for answer in state.answers
-    }
-    for bucket_id in target_bucket_ids:
-        try:
-            weave_story_bucket(bucket_id)
-        except StoryWeaveError:
-            # The Bucket Update remains pending/failed for review; completion should
-            # still show the summary the person just created.
-            pass
-
     _ensure_bay_questions()
 
     return CuriousCompletion(
