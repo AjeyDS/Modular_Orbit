@@ -54,7 +54,7 @@ def list_recent_facts(limit: int = 20, conn: Connection | None = None) -> list[d
             return list_recent_facts(limit, owned)
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT * FROM user_facts ORDER BY created_at DESC LIMIT %s",
+            "SELECT * FROM user_facts ORDER BY created_at DESC, id DESC LIMIT %s",
             (limit,),
         )
         return [dict(r) for r in cur.fetchall()]
