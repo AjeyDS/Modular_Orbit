@@ -50,3 +50,39 @@ def test_create_life_item_captures_fact():
     assert any(f["ref"].get("life_item_id") == str(task.id) for f in facts)
 
     remove_task(task.id)
+
+
+def test_update_life_item_capture_gated_on_meaningful_edit():
+    from uuid import uuid4
+    from app.lifecycle import update_life_item
+    from app.modules.tasks import TaskCreate, create_task, remove_task
+    from app.user_model import list_unwoven_facts
+
+    task = create_task(
+        TaskCreate(title="Original title", request_id=f"fact-update-{uuid4().hex}"),
+        review=False,
+    )
+
+    def updated_facts():
+        return [
+            f
+            for f in list_unwoven_facts()
+            if f["source"] == "life_item"
+            and f["ref"].get("life_item_id") == str(task.id)
+            and f["text"].startswith("Updated")
+        ]
+
+    # Baseline: only the "Added" fact from creation exists; no "Updated" facts yet.
+    assert updated_facts() == []
+
+    # Non-meaningful edit must NOT emit an "Updated" fact.
+    update_life_item(task.id, title="System touched title", meaningful_edit=False)
+    assert updated_facts() == [], "non-meaningful edit should not capture an Updated fact"
+
+    # Meaningful edit must emit an "Updated" fact.
+    update_life_item(task.id, title="User edited title", meaningful_edit=True)
+    facts = updated_facts()
+    assert len(facts) == 1, "meaningful edit should capture exactly one Updated fact"
+    assert "User edited title" in facts[0]["text"]
+
+    remove_task(task.id)

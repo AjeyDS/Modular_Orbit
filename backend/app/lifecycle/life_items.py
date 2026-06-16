@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,8 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 
 from app.db import transaction
+
+logger = logging.getLogger(__name__)
 
 
 class LifeItemError(ValueError):
@@ -23,18 +26,26 @@ class LifeItemResult:
     created: bool
 
 
-def _capture_life_item_fact(item: dict, verb: str) -> None:
-    # Local import avoids a module-load cycle (user_model imports app.db, not lifecycle).
-    from app.user_model import capture_fact
+def _capture_life_item_fact(item: dict[str, Any], verb: str) -> None:
+    """Best-effort: append a life-item event to the user fact stream.
+
+    Runs after the life-item write has committed; a failure here must never
+    fail the user-facing operation, so all exceptions are swallowed.
+    """
     title = (item.get("title") or "").strip()
     if not title:
         return
     kind = item.get("item_type") or "item"
-    capture_fact(
-        source="life_item",
-        text=f"{verb} {kind}: {title}",
-        ref={"life_item_id": str(item["id"]), "kind": kind},
-    )
+    try:
+        # Local import avoids a module-load cycle (user_model imports app.db, not lifecycle).
+        from app.user_model import capture_fact
+        capture_fact(
+            source="life_item",
+            text=f"{verb} {kind}: {title}",
+            ref={"life_item_id": str(item["id"]), "kind": kind},
+        )
+    except Exception:
+        logger.warning("Failed to capture life-item fact for %s", item.get("id"), exc_info=True)
 
 
 def get_or_create_default_module_instance(conn: Connection, module_id: str) -> UUID:
@@ -212,7 +223,8 @@ def update_life_item(
                 raise LifeItemError(f"Unknown Life Item: {life_item_id}")
             updated = dict(row)
 
-    _capture_life_item_fact(updated, "Updated")
+    if meaningful_edit:
+        _capture_life_item_fact(updated, "Updated")
     return updated
 
 
