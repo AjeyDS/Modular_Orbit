@@ -23,6 +23,20 @@ class LifeItemResult:
     created: bool
 
 
+def _capture_life_item_fact(item: dict, verb: str) -> None:
+    # Local import avoids a module-load cycle (user_model imports app.db, not lifecycle).
+    from app.user_model import capture_fact
+    title = (item.get("title") or "").strip()
+    if not title:
+        return
+    kind = item.get("item_type") or "item"
+    capture_fact(
+        source="life_item",
+        text=f"{verb} {kind}: {title}",
+        ref={"life_item_id": str(item["id"]), "kind": kind},
+    )
+
+
 def get_or_create_default_module_instance(conn: Connection, module_id: str) -> UUID:
     """Return the default Module Instance for a developer-created module."""
     with conn.cursor() as cur:
@@ -140,7 +154,10 @@ def create_life_item(
         if created and module["storage_strategy"] == "extended":
             _insert_side_table_row(conn, module, item["id"], side_table_data or {})
 
-        return LifeItemResult(item=item, created=created)
+    if created:
+        _capture_life_item_fact(item, "Added")
+
+    return LifeItemResult(item=item, created=created)
 
 
 def update_life_item(
@@ -193,7 +210,10 @@ def update_life_item(
             row = cur.fetchone()
             if row is None:
                 raise LifeItemError(f"Unknown Life Item: {life_item_id}")
-            return dict(row)
+            updated = dict(row)
+
+    _capture_life_item_fact(updated, "Updated")
+    return updated
 
 
 def set_lifecycle_status(life_item_id: UUID | str, lifecycle_status: str) -> dict[str, Any]:
@@ -223,9 +243,16 @@ def delete_life_item(life_item_id: UUID | str) -> None:
     """Hard-delete a Life Item and rely on database cascades for derived rows."""
     with transaction() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM life_items WHERE id = %s RETURNING id", (life_item_id,))
-            if cur.fetchone() is None:
+            cur.execute(
+                "DELETE FROM life_items WHERE id = %s RETURNING id, title, item_type",
+                (life_item_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
                 raise LifeItemError(f"Unknown Life Item: {life_item_id}")
+            removed = dict(row)
+
+    _capture_life_item_fact(removed, "Removed")
 
 
 def get_life_item(life_item_id: UUID | str) -> dict[str, Any]:

@@ -33,3 +33,20 @@ def test_unwoven_budget_counts_and_chars():
     count, chars = unwoven_budget()
     assert count == 2
     assert chars == 150
+
+def test_create_life_item_captures_fact():
+    from uuid import uuid4
+    from app.modules.tasks import TaskCreate, create_task, remove_task
+    from app.user_model import list_unwoven_facts
+
+    task = create_task(
+        TaskCreate(title="Buy concrete sealer", request_id=f"fact-create-{uuid4().hex}"),
+        review=False,
+    )
+
+    facts = [f for f in list_unwoven_facts() if f["source"] == "life_item"]
+    assert facts, "expected a life_item fact to be captured on create"
+    assert any(task.title in f["text"] for f in facts)
+    assert any(f["ref"].get("life_item_id") == str(task.id) for f in facts)
+
+    remove_task(task.id)
