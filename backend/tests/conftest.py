@@ -28,6 +28,8 @@ def _truncate_mutable_tables() -> None:
             cur.execute(
                 """
                 TRUNCATE TABLE
+                    user_facts,
+                    user_model_weave,
                     generated_outputs,
                     goals,
                     capture_proposals,
