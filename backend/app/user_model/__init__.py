@@ -1,5 +1,6 @@
 """Story Bucket and goal helpers for the User Model."""
 
+from app.user_model.context import build_user_model_context
 from app.user_model.facts import (
     capture_fact,
     list_unwoven_facts,
@@ -45,6 +46,7 @@ __all__ = [
     "StoryBucketUpdate",
     "WEAVE_CHAR_THRESHOLD",
     "WEAVE_FACT_THRESHOLD",
+    "build_user_model_context",
     "capture_fact",
     "create_goal",
     "create_story_bucket",
