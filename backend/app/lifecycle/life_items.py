@@ -26,6 +26,12 @@ class LifeItemResult:
     created: bool
 
 
+# Curious-module scaffolding (sessions, seeded questions, harvested answers) are
+# internal plumbing, not durable user life items. They must not leak into the
+# user fact stream as "Added curious_question: ..." noise that the weave folds in.
+_NON_DURABLE_ITEM_TYPES = frozenset({"curious_session", "curious_question", "curious_answer"})
+
+
 def _capture_life_item_fact(item: dict[str, Any], verb: str) -> None:
     """Best-effort: append a life-item event to the user fact stream.
 
@@ -39,6 +45,8 @@ def _capture_life_item_fact(item: dict[str, Any], verb: str) -> None:
     if isinstance(source, Mapping) and source.get("kind") == "companion_capture":
         return
     kind = item.get("item_type") or "item"
+    if kind in _NON_DURABLE_ITEM_TYPES:
+        return
     try:
         # Local import avoids a module-load cycle (user_model imports app.db, not lifecycle).
         from app.user_model import capture_fact

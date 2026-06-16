@@ -86,3 +86,25 @@ def test_update_life_item_capture_gated_on_meaningful_edit():
     assert "User edited title" in facts[0]["text"]
 
     remove_task(task.id)
+
+
+def test_capture_skips_curious_scaffolding_item_types():
+    """Curious sessions/questions/answers are internal plumbing, not user facts."""
+    from app.lifecycle.life_items import _capture_life_item_fact
+    from app.user_model import list_unwoven_facts
+
+    for kind in ("curious_session", "curious_question", "curious_answer"):
+        _capture_life_item_fact(
+            {"id": "00000000-0000-0000-0000-000000000001", "title": "scaffolding", "item_type": kind},
+            "Added",
+        )
+    assert [f for f in list_unwoven_facts() if f["source"] == "life_item"] == []
+
+    # A durable item type still captures.
+    _capture_life_item_fact(
+        {"id": "00000000-0000-0000-0000-000000000002", "title": "Real task", "item_type": "task"},
+        "Added",
+    )
+    facts = [f for f in list_unwoven_facts() if f["source"] == "life_item"]
+    assert len(facts) == 1
+    assert "Real task" in facts[0]["text"]
