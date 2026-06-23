@@ -7,7 +7,6 @@ import {
   FileText,
   Plus,
   Trash2,
-  X,
 } from 'lucide-react'
 import {
   addPlanStep,
@@ -21,18 +20,50 @@ import {
   type PlanStepItem,
 } from '../lib/api'
 import { AsyncStatusPills } from '../components/status'
+import {
+  CollectionRow,
+  CollectionView,
+  EmptyState,
+  FilterTabs,
+  Pill,
+  RowActions,
+  useToast,
+} from '../components/ui'
 import { pageContentClass } from '../layout/pageShell'
 import { ImportPlanDialog } from '../components/plans/ImportPlanDialog'
 
 type PlanFilter = Extract<LifecycleStatus, 'active' | 'completed' | 'archived'>
+
+type PlanStatus = 'complete' | 'in progress' | 'not started'
+
+function planStatus(plan: PlanItem): PlanStatus {
+  if (plan.total_steps > 0 && plan.completed_steps === plan.total_steps) return 'complete'
+  if (plan.completed_steps > 0) return 'in progress'
+  return 'not started'
+}
+
+// Recursively mark a step (by id) completed within the nested tree, returning a
+// new tree. Used for the optimistic complete-step path so the leaf flips and any
+// branch progress counts recompute from the updated children.
+function markStepCompleted(steps: PlanStepItem[], stepId: string): PlanStepItem[] {
+  return steps.map((step) => {
+    if (step.id === stepId) {
+      return { ...step, status: 'completed' as const }
+    }
+    if (step.children && step.children.length > 0) {
+      return { ...step, children: markStepCompleted(step.children, stepId) }
+    }
+    return step
+  })
+}
 
 export default function PlansPage() {
   const [plans, setPlans] = useState<PlanItem[]>([])
   const [filter, setFilter] = useState<PlanFilter>('active')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [status, setStatus] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
+  const { toast, undoToast } = useToast()
 
   async function load(nextFilter = filter) {
     setLoading(true)
@@ -65,8 +96,8 @@ export default function PlansPage() {
   )
 
   async function handleImported(message: string) {
-    setStatus(message)
     setError('')
+    toast({ message, tone: 'success' })
     if (filter !== 'active') {
       setFilter('active')
     } else {
@@ -74,24 +105,149 @@ export default function PlansPage() {
     }
   }
 
+  // Optimistic complete: flip lifecycle locally (drops the plan from the active
+  // filter), persist in the background, reconcile via load() only on error.
+  function handleCompletePlan(plan: PlanItem) {
+    if (plan.lifecycle_status !== 'active') return
+    setPlans((current) =>
+      filter === 'active'
+        ? current.filter((item) => item.id !== plan.id)
+        : current.map((item) =>
+            item.id === plan.id ? { ...item, lifecycle_status: 'completed' as const } : item,
+          ),
+    )
+    void completePlan(plan.id).catch((err) => {
+      toast({ message: err instanceof Error ? err.message : 'Unable to complete plan', tone: 'danger' })
+      void load()
+    })
+  }
+
+  // Optimistic archive: drop from the active/completed filters immediately.
+  function handleArchivePlan(plan: PlanItem) {
+    setPlans((current) =>
+      filter === 'archived'
+        ? current.map((item) =>
+            item.id === plan.id ? { ...item, lifecycle_status: 'archived' as const } : item,
+          )
+        : current.filter((item) => item.id !== plan.id),
+    )
+    void archivePlan(plan.id).catch((err) => {
+      toast({ message: err instanceof Error ? err.message : 'Unable to archive plan', tone: 'danger' })
+      void load()
+    })
+  }
+
+  // Optimistic delete + undo: drop immediately, restore at the original index on
+  // undo, persist the deletion on commit.
+  function handleDeletePlan(plan: PlanItem) {
+    const removed = plan
+    const index = plans.findIndex((item) => item.id === removed.id)
+
+    setPlans((current) => current.filter((item) => item.id !== removed.id))
+
+    undoToast({
+      message: 'Plan deleted',
+      onUndo: () => {
+        setPlans((current) => {
+          const next = [...current]
+          next.splice(Math.min(index < 0 ? next.length : index, next.length), 0, removed)
+          return next
+        })
+      },
+      onCommit: () => {
+        void deletePlan(removed.id).catch((err) => {
+          toast({ message: err instanceof Error ? err.message : 'Unable to delete plan', tone: 'danger' })
+          void load()
+        })
+      },
+    })
+  }
+
+  // Optimistic complete-step: mark the leaf completed in the nested tree and bump
+  // the parent plan's completed_steps / progress_percent.
+  function handleCompleteStep(planId: string, stepId: string) {
+    setPlans((current) =>
+      current.map((plan) => {
+        if (plan.id !== planId) return plan
+        const completedSteps = Math.min(plan.completed_steps + 1, plan.total_steps)
+        const progress = plan.total_steps > 0 ? Math.round((completedSteps / plan.total_steps) * 100) : 0
+        return {
+          ...plan,
+          steps: markStepCompleted(plan.steps, stepId),
+          completed_steps: completedSteps,
+          progress_percent: progress,
+        }
+      }),
+    )
+    void completePlanStep(planId, stepId).catch((err) => {
+      toast({ message: err instanceof Error ? err.message : 'Unable to complete step', tone: 'danger' })
+      void load()
+    })
+  }
+
+  // Optimistic add-step: append the new leaf, bump total_steps, recompute the
+  // progress denominator. Reconcile to the server item via load() on error.
+  function handleAddStep(planId: string, title: string) {
+    const tempId = `temp-${Date.now()}`
+    const optimisticStep: PlanStepItem = {
+      id: tempId,
+      parent_step_id: null,
+      position: 0,
+      title,
+      description: '',
+      status: 'active',
+      completed_at: null,
+      children: [],
+    }
+    setPlans((current) =>
+      current.map((plan) => {
+        if (plan.id !== planId) return plan
+        const totalSteps = plan.total_steps + 1
+        const progress = totalSteps > 0 ? Math.round((plan.completed_steps / totalSteps) * 100) : 0
+        return {
+          ...plan,
+          steps: [...plan.steps, optimisticStep],
+          total_steps: totalSteps,
+          progress_percent: progress,
+        }
+      }),
+    )
+    void addPlanStep(planId, { title })
+      .then((updated) => {
+        setPlans((current) => current.map((plan) => (plan.id === planId ? updated : plan)))
+      })
+      .catch((err) => {
+        toast({ message: err instanceof Error ? err.message : 'Unable to add step', tone: 'danger' })
+        void load()
+      })
+  }
+
+  const emptyCopy =
+    filter === 'active'
+      ? {
+          title: 'No plans yet.',
+          body: 'Paste a plan from ChatGPT, Claude, Gemini, or notes. Orbit extracts the hierarchy and saves every node into the modular lifecycle.',
+        }
+      : { title: `No ${filter} plans yet.`, body: undefined }
+
   return (
-    <div className="min-h-[calc(100vh-3rem)] bg-gray-50 text-gray-800 dark:bg-[#18181A] dark:text-gray-200">
+    <div className="min-h-[calc(100vh-3rem)] bg-bg text-fg">
       <div className={`${pageContentClass} py-7`}>
-        <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <header className="mb-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900 dark:text-gray-100">Plans</h1>
-            <p className="text-[12px] text-gray-500 dark:text-gray-500">
+            <h1 className="text-title font-semibold tracking-[-0.02em] text-fg">Plans</h1>
+            <p className="text-caption text-fg-secondary">
               <span className="tabular-nums">{plans.length}</span> {plans.length === 1 ? 'plan' : 'plans'}
-              <span className="px-1.5 text-gray-300 dark:text-gray-700">·</span>
+              <span className="px-1.5 text-fg-tertiary">·</span>
               <span className="tabular-nums">{activeCount}</span> active
-              <span className="px-1.5 text-gray-300 dark:text-gray-700">·</span>
+              <span className="px-1.5 text-fg-tertiary">·</span>
               <span className="tabular-nums">{totalSteps}</span> steps
             </p>
           </div>
           <button
             type="button"
             onClick={() => setDialogOpen(true)}
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-3.5 py-2 text-[13px] font-semibold text-white shadow-[0_1px_0_rgba(0,0,0,0.04)] transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97]"
+            className="inline-flex items-center gap-2 rounded-control bg-accent px-3.5 py-2 text-label font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-accent-hover active:scale-[0.97]"
           >
             <Plus size={15} />
             New plan
@@ -99,35 +255,56 @@ export default function PlansPage() {
         </header>
 
         {error && (
-          <StatusBanner tone="error" message={error} onDismiss={() => setError('')} />
-        )}
-        {status && !error && (
-          <StatusBanner tone="success" message={status} onDismiss={() => setStatus('')} />
-        )}
-
-        <section
-          className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
-          style={{ borderWidth: '0.5px' }}
-        >
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <FilterTabs value={filter} onChange={setFilter} />
-            <p className="text-[12px] text-gray-500 dark:text-gray-500">
-              Saved plans keep their nested structure and lifecycle statuses.
-            </p>
+          <div className="mb-3 rounded-control border border-danger/30 bg-danger/10 px-4 py-3 text-label text-danger">
+            {error}
           </div>
+        )}
 
-          {loading && plans.length === 0 ? (
-            <div className="py-12 text-center text-[14px] text-gray-500">Loading plans…</div>
-          ) : sortedPlans.length === 0 ? (
-            <EmptyPlansState filter={filter} onCreate={() => setDialogOpen(true)} />
-          ) : (
-            <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(22rem,1fr))]">
-              {sortedPlans.map((plan) => (
-                <PlanCard key={plan.id} plan={plan} onChanged={() => void load()} />
-              ))}
-            </div>
-          )}
-        </section>
+        <div className="mb-4">
+          <FilterTabs
+            options={['active', 'completed', 'archived']}
+            value={filter}
+            onChange={(value) => setFilter(value as PlanFilter)}
+            ariaLabel="Plan filter"
+          />
+        </div>
+
+        <CollectionView
+          divided
+          loading={loading && plans.length === 0}
+          isEmpty={sortedPlans.length === 0}
+          empty={
+            <EmptyState
+              icon={<FileText size={18} />}
+              title={emptyCopy.title}
+              body={emptyCopy.body}
+              action={
+                filter === 'active' ? (
+                  <button
+                    type="button"
+                    onClick={() => setDialogOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-control bg-accent px-3.5 py-2 text-label font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-accent-hover active:scale-[0.97]"
+                  >
+                    <Plus size={15} />
+                    Import your first plan
+                  </button>
+                ) : undefined
+              }
+            />
+          }
+        >
+          {sortedPlans.map((plan) => (
+            <PlanRow
+              key={plan.id}
+              plan={plan}
+              onComplete={handleCompletePlan}
+              onArchive={handleArchivePlan}
+              onDelete={handleDeletePlan}
+              onCompleteStep={handleCompleteStep}
+              onAddStep={handleAddStep}
+            />
+          ))}
+        </CollectionView>
       </div>
 
       <ImportPlanDialog
@@ -139,239 +316,265 @@ export default function PlansPage() {
   )
 }
 
-function EmptyPlansState({ filter, onCreate }: { filter: PlanFilter; onCreate: () => void }) {
-  if (filter !== 'active') {
-    return (
-      <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-12 text-center text-[14px] text-gray-500 dark:border-gray-700 dark:bg-[#18181A] dark:text-gray-500">
-        No {filter} plans yet.
-      </div>
-    )
-  }
-  return (
-    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-6 py-12 text-center dark:border-gray-700 dark:bg-[#18181A]">
-      <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-white text-gray-400 dark:bg-gray-800 dark:text-gray-500">
-        <FileText size={18} />
-      </div>
-      <h3 className="text-[16px] font-semibold tracking-[-0.02em] text-gray-800 dark:text-gray-200">No plans yet</h3>
-      <p className="mx-auto mt-2 max-w-sm text-[13px] leading-6 text-gray-500 dark:text-gray-500">
-        Paste a plan from ChatGPT, Claude, Gemini, or notes. Orbit extracts the hierarchy and saves every node into the modular lifecycle.
-      </p>
-      <button
-        type="button"
-        onClick={onCreate}
-        className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-500 px-3.5 py-2 text-[13px] font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97]"
-      >
-        <Plus size={15} />
-        Import your first plan
-      </button>
-    </div>
-  )
-}
-
-function StatusBanner({ tone, message, onDismiss }: { tone: 'error' | 'success'; message: string; onDismiss: () => void }) {
-  const classes = tone === 'error'
-    ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200'
-    : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200'
-  return (
-    <div className={`mb-4 flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-[13px] ${classes}`}>
-      <span>{message}</span>
-      <button type="button" onClick={onDismiss} className="opacity-70 transition-opacity hover:opacity-100">
-        <X size={14} />
-      </button>
-    </div>
-  )
-}
-
-function PlanCard({ plan, onChanged }: { plan: PlanItem; onChanged: () => void }) {
+function PlanRow({
+  plan,
+  onComplete,
+  onArchive,
+  onDelete,
+  onCompleteStep,
+  onAddStep,
+}: {
+  plan: PlanItem
+  onComplete: (plan: PlanItem) => void
+  onArchive: (plan: PlanItem) => void
+  onDelete: (plan: PlanItem) => void
+  onCompleteStep: (planId: string, stepId: string) => void
+  onAddStep: (planId: string, title: string) => void
+}) {
   const [expanded, setExpanded] = useState(false)
   const [newStep, setNewStep] = useState('')
-  const status: 'complete' | 'in progress' | 'not started' =
-    plan.total_steps > 0 && plan.completed_steps === plan.total_steps
-      ? 'complete'
-      : plan.completed_steps > 0
-        ? 'in progress'
-        : 'not started'
-  const accentColor = status === 'complete' ? '#1D9E75' : status === 'in progress' ? '#4A9EFF' : '#6B7280'
-  const squareBg = status === 'complete' ? '#d1f5e8' : status === 'in progress' ? '#dceefa' : '#F3F4F6'
+  const status = planStatus(plan)
+  const statusColor =
+    status === 'complete' ? 'text-success' : status === 'in progress' ? 'text-accent' : 'text-fg-tertiary'
 
-  async function submitStep() {
+  function submitStep() {
     const title = newStep.trim()
     if (!title) return
-    await addPlanStep(plan.id, { title })
+    onAddStep(plan.id, title)
     setNewStep('')
-    onChanged()
   }
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-gray-200 bg-white transition-colors hover:border-gray-300 dark:border-gray-800 dark:bg-[#18181A] dark:hover:border-gray-700">
-      <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-3 px-4 pb-2 pt-3 text-left">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: squareBg }}>
-          {status === 'complete' ? (
-            <CheckCircle2 size={17} style={{ color: accentColor }} />
-          ) : (
-            <span className="text-[12px] font-semibold leading-none tabular-nums" style={{ color: accentColor }}>
-              {plan.completed_steps > 0 ? `${plan.completed_steps}/${plan.total_steps}` : String(plan.total_steps)}
-            </span>
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-semibold leading-snug text-gray-800 dark:text-gray-200">
-            {plan.title}
-          </span>
-          <span className="mt-0.5 block text-[12px] text-gray-500 dark:text-gray-500">
-            {plan.total_steps} step{plan.total_steps !== 1 ? 's' : ''} · {status}
-          </span>
-        </div>
-        <ChevronRight size={14} className={`shrink-0 text-gray-400 transition-transform duration-150 ease-out ${expanded ? 'rotate-90' : ''}`} />
-      </button>
-
-      <div className="mx-4 mb-3 h-[4px] overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
-        <div className="h-full rounded-full transition-[width] duration-200 ease-out" style={{ width: `${plan.progress_percent}%`, backgroundColor: accentColor }} />
-      </div>
-
-      {expanded && (
-        <div className="border-t border-gray-100 px-4 py-3 dark:border-gray-800">
-          {plan.description && <p className="mb-3 text-[13px] leading-6 text-gray-500 dark:text-gray-400">{plan.description}</p>}
-          <PlanStepTree planId={plan.id} steps={plan.steps} onChanged={onChanged} />
-
-          {plan.lifecycle_status === 'active' && (
-            <div className="mt-3 flex gap-2">
-              <input
-                value={newStep}
-                onChange={(event) => setNewStep(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') void submitStep()
-                }}
-                placeholder="Add a step"
-                className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus:border-gray-600"
-              />
-              <button type="button" onClick={() => void submitStep()} className="rounded-xl bg-blue-500 px-3 py-2 text-[12px] font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97]">
-                Add
-              </button>
-            </div>
-          )}
-
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <AsyncStatusPills connection={plan.connection_status} chunk={plan.chunk_status} bucketUpdate={plan.bucket_update_status} />
-            <div className="flex items-center gap-2">
-              {plan.lifecycle_status === 'active' && (
-                <IconAction label="Complete plan" onClick={async () => { await completePlan(plan.id); onChanged() }}>
-                  <CheckCircle2 size={14} />
-                </IconAction>
+    <CollectionRow variant="plain">
+      <div className="px-1 py-3">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="flex min-w-0 flex-1 items-center gap-3 text-left"
+            aria-label={expanded ? `Collapse ${plan.title}` : `Expand ${plan.title}`}
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center">
+              {status === 'complete' ? (
+                <CheckCircle2 size={20} className="text-success" strokeWidth={1.8} />
+              ) : (
+                <span className="flex h-9 w-9 items-center justify-center rounded-control bg-surface-inset text-caption font-semibold tabular-nums text-fg-secondary">
+                  {plan.completed_steps > 0
+                    ? `${plan.completed_steps}/${plan.total_steps}`
+                    : String(plan.total_steps)}
+                </span>
               )}
-              <IconAction label="Archive plan" onClick={async () => { await archivePlan(plan.id); onChanged() }}>
-                <Archive size={14} />
-              </IconAction>
-              <IconAction label="Delete plan" danger onClick={async () => { await deletePlan(plan.id); onChanged() }}>
-                <Trash2 size={14} />
-              </IconAction>
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-body font-medium leading-snug text-fg">{plan.title}</span>
+              <span className="mt-0.5 block text-caption text-fg-secondary">
+                {plan.total_steps} step{plan.total_steps !== 1 ? 's' : ''} ·{' '}
+                <span className={statusColor}>{status}</span>
+              </span>
+            </span>
+            <ChevronRight
+              size={14}
+              className={`shrink-0 text-fg-tertiary transition-transform duration-150 ease-out ${
+                expanded ? 'rotate-90' : ''
+              }`}
+            />
+          </button>
+          <RowActions className="self-start pt-0.5">
+            {plan.lifecycle_status === 'active' && (
+              <button
+                type="button"
+                onClick={() => onComplete(plan)}
+                aria-label={`Complete ${plan.title}`}
+                title="Complete plan"
+                className="text-fg-tertiary transition-colors hover:text-success"
+              >
+                <CheckCircle2 size={14} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onArchive(plan)}
+              aria-label={`Archive ${plan.title}`}
+              title="Archive plan"
+              className="text-fg-tertiary transition-colors hover:text-fg"
+            >
+              <Archive size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => onDelete(plan)}
+              aria-label={`Delete ${plan.title}`}
+              title="Delete plan"
+              className="text-fg-tertiary transition-colors hover:text-danger"
+            >
+              <Trash2 size={14} />
+            </button>
+          </RowActions>
+        </div>
+
+        <div className="ml-12 mr-1 mt-2 h-[4px] overflow-hidden rounded-full bg-surface-inset">
+          <div
+            className={`h-full rounded-full transition-[width] duration-200 ease-out ${
+              status === 'complete' ? 'bg-success' : 'bg-accent'
+            }`}
+            style={{ width: `${plan.progress_percent}%` }}
+          />
+        </div>
+
+        {expanded && (
+          <div className="ml-12 mr-1 mt-3 space-y-3">
+            {plan.description && <p className="text-label leading-6 text-fg-secondary">{plan.description}</p>}
+
+            <PlanStepTree planId={plan.id} steps={plan.steps} onCompleteStep={onCompleteStep} />
+
+            {plan.lifecycle_status === 'active' && (
+              <div className="flex items-center gap-2 rounded-control border border-hairline bg-surface-inset px-2 py-1 transition-colors focus-within:border-hairline-strong">
+                <button
+                  type="button"
+                  onClick={submitStep}
+                  disabled={!newStep.trim()}
+                  aria-label="Add step"
+                  className="shrink-0 rounded-md p-1 text-fg-tertiary transition-colors hover:text-accent disabled:opacity-40"
+                >
+                  <Plus size={16} />
+                </button>
+                <input
+                  value={newStep}
+                  onChange={(event) => setNewStep(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      submitStep()
+                    }
+                  }}
+                  placeholder="Add a step…"
+                  className="min-w-0 flex-1 bg-transparent text-label text-fg outline-none placeholder:text-fg-tertiary"
+                />
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <AsyncStatusPills
+                connection={plan.connection_status}
+                chunk={plan.chunk_status}
+                bucketUpdate={plan.bucket_update_status}
+              />
             </div>
           </div>
-        </div>
-      )}
-    </article>
+        )}
+      </div>
+    </CollectionRow>
   )
 }
 
-function IconAction({ label, danger = false, children, onClick }: { label: string; danger?: boolean; children: React.ReactNode; onClick: () => void }) {
+function PlanStepTree({
+  planId,
+  steps,
+  onCompleteStep,
+}: {
+  planId: string
+  steps: PlanStepItem[]
+  onCompleteStep: (planId: string, stepId: string) => void
+}) {
+  if (steps.length === 0) {
+    return <p className="text-caption text-fg-tertiary">No steps yet.</p>
+  }
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className={`rounded-lg p-1.5 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.94] ${
-        danger ? 'text-gray-300 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/30' : 'text-gray-300 hover:bg-emerald-50 hover:text-[#1D9E75] dark:hover:bg-emerald-950/30'
-      }`}
-    >
-      {children}
-    </button>
-  )
-}
-
-function PlanStepTree({ planId, steps, onChanged }: { planId: string; steps: PlanStepItem[]; onChanged: () => void }) {
-  return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
       {steps.map((step) => (
-        <PlanStepNode key={step.id} planId={planId} step={step} onChanged={onChanged} depth={0} />
+        <PlanStepNode
+          key={step.id}
+          planId={planId}
+          step={step}
+          onCompleteStep={onCompleteStep}
+          depth={0}
+        />
       ))}
     </div>
   )
 }
 
-function PlanStepNode({ planId, step, onChanged, depth }: { planId: string; step: PlanStepItem; onChanged: () => void; depth: number }) {
+function PlanStepNode({
+  planId,
+  step,
+  onCompleteStep,
+  depth,
+}: {
+  planId: string
+  step: PlanStepItem
+  onCompleteStep: (planId: string, stepId: string) => void
+  depth: number
+}) {
   const [collapsed, setCollapsed] = useState(false)
   const children = step.children || []
   const isLeaf = children.length === 0
   const progress = branchProgress(step)
+  const completed = step.status === 'completed'
 
   return (
-    <div className={depth > 0 ? 'ml-4 border-l border-gray-200 pl-3 dark:border-gray-800' : ''}>
-      <div className="group flex items-start gap-2 rounded-xl px-2 py-2 transition-colors hover:bg-gray-50/60 dark:hover:bg-gray-800/40">
+    <div className={depth > 0 ? 'ml-4 border-l border-hairline pl-3' : ''}>
+      <div className="group/step flex items-start gap-2 rounded-control px-2 py-1.5 transition-colors hover:bg-surface-inset">
         {!isLeaf ? (
           <button
             type="button"
             onClick={() => setCollapsed((value) => !value)}
-            className="mt-0.5 rounded-md text-gray-400 transition-colors hover:text-gray-700 dark:hover:text-gray-200"
+            aria-label={collapsed ? `Expand ${step.title}` : `Collapse ${step.title}`}
+            className="mt-0.5 rounded-md text-fg-tertiary transition-colors hover:text-fg"
           >
             {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           </button>
         ) : (
           <button
             type="button"
-            disabled={step.status === 'completed'}
-            onClick={async () => {
-              await completePlanStep(planId, step.id)
-              onChanged()
-            }}
+            disabled={completed}
+            onClick={() => onCompleteStep(planId, step.id)}
+            aria-label={`Complete ${step.title}`}
             className="mt-0.5 rounded-full transition-transform active:scale-[0.9] disabled:cursor-default"
           >
-            {step.status === 'completed' ? (
-              <CheckCircle2 size={15} className="text-[#1D9E75]" />
+            {completed ? (
+              <CheckCircle2 size={15} className="text-success" />
             ) : (
-              <span className="block h-[15px] w-[15px] rounded-full border border-gray-300 bg-white dark:border-gray-600 dark:bg-[#1C1C1E]" />
+              <span className="block h-[15px] w-[15px] rounded-full border border-hairline" />
             )}
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <div className={`text-[13px] ${step.status === 'completed' ? 'text-gray-400 line-through' : isLeaf ? 'text-gray-700 dark:text-gray-300' : 'font-semibold text-gray-800 dark:text-gray-200'}`}>
+          <div
+            className={`text-label ${
+              completed
+                ? 'text-fg-tertiary line-through'
+                : isLeaf
+                  ? 'text-fg'
+                  : 'font-medium text-fg'
+            }`}
+          >
             {step.title}
           </div>
-          {step.description && <div className="mt-0.5 text-[12px] leading-5 text-gray-500 dark:text-gray-500">{step.description}</div>}
+          {step.description && (
+            <div className="mt-0.5 text-caption leading-5 text-fg-secondary">{step.description}</div>
+          )}
         </div>
         {!isLeaf && (
-          <span className="mt-0.5 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] tabular-nums text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-            {progress.completed}/{progress.total}
+          <span className="mt-0.5 shrink-0">
+            <Pill tone="neutral">
+              {progress.completed}/{progress.total}
+            </Pill>
           </span>
         )}
       </div>
       {!collapsed && children.length > 0 && (
-        <div className="mt-1 space-y-1">
+        <div className="mt-0.5 space-y-0.5">
           {children.map((child) => (
-            <PlanStepNode key={child.id} planId={planId} step={child} onChanged={onChanged} depth={depth + 1} />
+            <PlanStepNode
+              key={child.id}
+              planId={planId}
+              step={child}
+              onCompleteStep={onCompleteStep}
+              depth={depth + 1}
+            />
           ))}
         </div>
       )}
-    </div>
-  )
-}
-
-function FilterTabs({ value, onChange }: { value: PlanFilter; onChange: (value: PlanFilter) => void }) {
-  return (
-    <div className="flex items-center rounded-lg bg-gray-100 p-0.5 dark:bg-gray-800">
-      {(['active', 'completed', 'archived'] as const).map((item) => (
-        <button
-          key={item}
-          type="button"
-          onClick={() => onChange(item)}
-          className={
-            value === item
-              ? 'rounded-md bg-white px-3 py-1 text-[12px] font-medium capitalize text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
-              : 'rounded-md px-3 py-1 text-[12px] capitalize text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300'
-          }
-        >
-          {item}
-        </button>
-      ))}
     </div>
   )
 }
