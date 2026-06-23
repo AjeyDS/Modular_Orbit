@@ -1,5 +1,6 @@
 export { cn } from './cn'
 export { Card, GlassPanel } from './Surface'
+export { MasterDetail, NavItem } from './MasterDetail'
 export { SegmentedControl, FilterTabs } from './SegmentedControl'
 export type { SegmentedOption } from './SegmentedControl'
 export { Pill } from './Pill'
