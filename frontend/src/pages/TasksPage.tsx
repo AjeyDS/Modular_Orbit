@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { CalendarDays, CheckCircle2, ChevronDown, ListTodo, RotateCcw, Sparkles, Trash2, X } from 'lucide-react'
+import { CalendarDays, CheckCircle2, ChevronDown, ListTodo, Plus, RotateCcw, Sparkles, Trash2, X } from 'lucide-react'
 import {
   completeTask,
   createTask,
@@ -20,7 +20,6 @@ import { AsyncStatusPills } from '../components/status'
 import { pageContentClass } from '../layout/pageShell'
 
 type TaskFilter = Extract<LifecycleStatus, 'active' | 'completed'>
-type DueWindow = TaskItem['due_window']
 
 const emptyPrioritySuggestion: TaskPrioritySuggestionState = {
   id: null,
@@ -47,7 +46,6 @@ export default function TasksPage() {
   const [completedTasks, setCompletedTasks] = useState<TaskItem[]>([])
   const [filter, setFilter] = useState<TaskFilter>('active')
   const [newTitle, setNewTitle] = useState('')
-  const [dueWindow, setDueWindow] = useState<DueWindow>('this_week')
   const [dueDate, setDueDate] = useState('')
   const [loading, setLoading] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
@@ -121,8 +119,8 @@ export default function TasksPage() {
             b.lifecycle_status === 'active' && rankedIndex.has(b.id) ? rankedIndex.get(b.id)! : Number.POSITIVE_INFINITY
           if (aRank !== bRank) return aRank - bRank
         }
-        const aDue = effectiveDueSort(a)
-        const bDue = effectiveDueSort(b)
+        const aDue = a.due_date
+        const bDue = b.due_date
         if (aDue && bDue) return aDue.localeCompare(bDue)
         if (aDue) return -1
         if (bDue) return 1
@@ -142,9 +140,8 @@ export default function TasksPage() {
     const title = newTitle.trim()
     if (!title) return
     try {
-      await createTask({ title, due_window: dueWindow, due_date: dueWindow === 'exact' ? dueDate || null : null })
+      await createTask({ title, due_date: dueDate || null })
       setNewTitle('')
-      setDueWindow('this_week')
       setDueDate('')
       setPrioritySuggestion(emptyPrioritySuggestion)
       if (filter !== 'active') {
@@ -251,10 +248,8 @@ export default function TasksPage() {
 
           <TaskComposer
             title={newTitle}
-            dueWindow={dueWindow}
             dueDate={dueDate}
             onTitleChange={setNewTitle}
-            onDueWindowChange={setDueWindow}
             onDueDateChange={setDueDate}
             onSubmit={handleAdd}
           />
@@ -408,18 +403,14 @@ function PrioritySuggestionsPanel({
 
 function TaskComposer({
   title,
-  dueWindow,
   dueDate,
   onTitleChange,
-  onDueWindowChange,
   onDueDateChange,
   onSubmit,
 }: {
   title: string
-  dueWindow: DueWindow
   dueDate: string
   onTitleChange: (value: string) => void
-  onDueWindowChange: (value: DueWindow) => void
   onDueDateChange: (value: string) => void
   onSubmit: (event?: FormEvent) => void
 }) {
@@ -429,19 +420,14 @@ function TaskComposer({
       className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
       style={{ borderWidth: '0.5px' }}
     >
-      <span className="text-gray-300 dark:text-gray-600">＋</span>
+      <Plus size={15} className="text-fg-tertiary" />
       <input
         value={title}
         onChange={(event) => onTitleChange(event.target.value)}
         placeholder="Add a task…"
         className="min-w-0 flex-1 bg-transparent text-[14px] text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
       />
-      <DueWindowPicker
-        dueWindow={dueWindow}
-        dueDate={dueDate}
-        onDueWindowChange={onDueWindowChange}
-        onDueDateChange={onDueDateChange}
-      />
+      <DateChip value={dueDate} onChange={onDueDateChange} />
       <button
         type="submit"
         disabled={!title.trim()}
@@ -453,77 +439,41 @@ function TaskComposer({
   )
 }
 
-function DueWindowPicker({
-  dueWindow,
-  dueDate,
-  disabled = false,
-  onDueWindowChange,
-  onDueDateChange,
+function DateChip({
+  value,
+  onChange,
 }: {
-  dueWindow: DueWindow
-  dueDate: string
-  disabled?: boolean
-  onDueWindowChange: (value: DueWindow) => void
-  onDueDateChange: (value: string) => void
+  value: string
+  onChange: (next: string) => void
 }) {
-  const dateInputRef = useRef<HTMLInputElement | null>(null)
-  const [open, setOpen] = useState(false)
-
-  function chooseWindow(next: DueWindow) {
-    onDueWindowChange(next)
-    if (next !== 'exact') onDueDateChange('')
-    setOpen(false)
-    if (next === 'exact') {
-      window.setTimeout(() => dateInputRef.current?.showPicker?.(), 0)
-    }
-  }
-
+  const ref = useRef<HTMLInputElement | null>(null)
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="relative">
+    <div className="relative inline-flex items-center">
+      <button
+        type="button"
+        onClick={() => ref.current?.showPicker?.()}
+        className="inline-flex items-center gap-1 rounded-control border border-hairline bg-surface-inset px-2.5 py-1.5 text-label font-medium text-fg-secondary transition-colors hover:text-fg"
+      >
+        <CalendarDays size={13} />
+        {value ? (value === todayISODate() ? 'Today' : value) : 'Add date'}
+      </button>
+      {value && (
         <button
           type="button"
-          disabled={disabled}
-          onClick={() => setOpen((value) => !value)}
-          className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-[12px] font-medium text-gray-500 transition-colors hover:border-gray-300 hover:text-gray-700 disabled:cursor-default disabled:opacity-50 dark:border-gray-700 dark:bg-[#202024] dark:text-gray-400 dark:hover:text-gray-200"
-          style={{ borderWidth: '0.5px' }}
+          onClick={() => onChange('')}
+          aria-label="Clear date"
+          className="ml-1 rounded-md p-0.5 text-fg-tertiary hover:text-danger"
         >
-          <CalendarDays size={13} />
-          {dueWindowButtonLabel(dueWindow, dueDate, todayISODate())}
-          <ChevronDown size={12} />
+          <X size={12} />
         </button>
-        {open && !disabled && (
-          <div
-            className="absolute right-0 top-full z-10 mt-1 w-40 rounded-xl border border-gray-200 bg-white p-1 shadow-lg dark:border-gray-800 dark:bg-[#1C1C1E]"
-            style={{ borderWidth: '0.5px' }}
-          >
-            {([
-              ['this_week', 'This week'],
-              ['this_month', 'This month'],
-              ['someday', 'Someday'],
-              ['exact', 'Pick a date...'],
-            ] as Array<[DueWindow, string]>).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => chooseWindow(value)}
-                className="block w-full rounded-lg px-3 py-2 text-left text-[12px] text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {dueWindow === 'exact' && !disabled && (
-        <input
-          ref={dateInputRef}
-          type="date"
-          value={dueDate}
-          onChange={(event) => onDueDateChange(event.target.value)}
-          className="w-32 bg-transparent text-[12px] text-gray-400 outline-none"
-        />
       )}
+      <input
+        ref={ref}
+        type="date"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="sr-only"
+      />
     </div>
   )
 }
@@ -564,14 +514,12 @@ function TaskRow({
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [title, setTitle] = useState(task.title)
-  const [dueWindow, setDueWindow] = useState<DueWindow>(task.due_window)
   const [dueDate, setDueDate] = useState(task.due_date ?? '')
 
   useEffect(() => {
     setTitle(task.title)
-    setDueWindow(task.due_window)
     setDueDate(task.due_date ?? '')
-  }, [task.title, task.due_window, task.due_date])
+  }, [task.title, task.due_date])
 
   async function saveTitle() {
     const next = title.trim()
@@ -582,13 +530,9 @@ function TaskRow({
     setEditing(false)
   }
 
-  async function saveDue(nextWindow: DueWindow, nextDate: string) {
-    setDueWindow(nextWindow)
+  async function saveDue(nextDate: string) {
     setDueDate(nextDate)
-    await updateTask(task.id, {
-      due_window: nextWindow,
-      due_date: nextWindow === 'exact' ? nextDate || null : null,
-    })
+    await updateTask(task.id, { due_date: nextDate || null })
     onChanged()
   }
 
@@ -703,29 +647,14 @@ function TaskRow({
         </div>
         <div className="flex shrink-0 items-center gap-2 self-start pt-0.5">
           {task.lifecycle_status === 'active' ? (
-            <DueWindowPicker
-              dueWindow={dueWindow}
-              dueDate={dueDate}
-              onDueWindowChange={(nextWindow) => {
-                if (nextWindow === 'exact') {
-                  setDueWindow(nextWindow)
-                  return
-                }
-                void saveDue(nextWindow, '')
-              }}
-              onDueDateChange={(nextDate) => {
-                void saveDue('exact', nextDate)
-              }}
-            />
+            <DateChip value={dueDate} onChange={(next) => void saveDue(next)} />
           ) : (
             <span
               className={`text-[12px] text-gray-400 ${
-                task.due_window === 'exact' && task.due_date === todayISO
-                  ? 'font-medium text-blue-500 dark:text-blue-400'
-                  : ''
+                task.due_date === todayISO ? 'font-medium text-blue-500 dark:text-blue-400' : ''
               }`}
             >
-              {dueWindowButtonLabel(task.due_window, task.due_date, todayISO)}
+              {task.due_date ? (task.due_date === todayISO ? 'today' : task.due_date) : 'Someday'}
             </span>
           )}
           <button
@@ -766,32 +695,3 @@ function FilterTabs({ value, onChange }: { value: TaskFilter; onChange: (value: 
   )
 }
 
-function dueWindowLabel(window: DueWindow, dueDate: string | null, todayISO: string) {
-  if (window === 'this_week') return 'This week'
-  if (window === 'this_month') return 'This month'
-  if (window === 'someday') return null
-  if (!dueDate) return 'Pick a date'
-  return dueDate === todayISO ? 'today' : dueDate
-}
-
-function dueWindowButtonLabel(window: DueWindow, dueDate: string | null, todayISO: string) {
-  return dueWindowLabel(window, dueDate, todayISO) ?? 'Someday'
-}
-
-function effectiveDueSort(task: TaskItem) {
-  const now = new Date()
-  if (task.due_window === 'someday') return null
-  if (task.due_window === 'exact') return task.due_date
-  if (task.due_window === 'this_week') {
-    const end = new Date(now)
-    const day = end.getDay() === 0 ? 6 : end.getDay() - 1
-    end.setDate(end.getDate() + (6 - day))
-    return isoDate(end)
-  }
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-  return isoDate(end)
-}
-
-function isoDate(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}

@@ -72,7 +72,6 @@ export interface TaskItem {
   connection_status: AsyncStepStatus
   chunk_status: AsyncStepStatus
   bucket_update_status: AsyncStepStatus
-  due_window: 'this_week' | 'this_month' | 'someday' | 'exact'
   due_date: string | null
   priority: number | null
   module_status: string | null
@@ -107,7 +106,6 @@ export interface TaskPrioritySuggestionState {
 export interface CreateTaskRequest {
   title: string
   description?: string
-  due_window?: 'this_week' | 'this_month' | 'someday' | 'exact'
   due_date?: string | null
   priority?: number | null
   module_status?: string | null
