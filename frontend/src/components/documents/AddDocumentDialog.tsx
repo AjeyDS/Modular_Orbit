@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Check, FileText, Loader2, UploadCloud, X } from 'lucide-react'
 import { createDocument, uploadDocument } from '../../lib/api'
+import { SegmentedControl } from '../ui'
 
 type Segment = 'upload' | 'paste'
 type UploadStatus = 'queued' | 'uploading' | 'done' | 'error'
@@ -203,49 +204,41 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
             transition={{ duration: 0.18, ease: easeOut }}
           />
           <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add a document"
             initial={{ opacity: 0, scale: 0.97, y: 8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ duration: 0.18, ease: easeOut }}
-            className="relative flex max-h-[min(90vh,720px)] w-full max-w-[600px] flex-col overflow-hidden rounded-[1.25rem] border border-gray-200 bg-white text-gray-800 shadow-[0_24px_64px_-24px_rgba(23,27,22,0.28)] dark:border-gray-800 dark:bg-[#1C1C1E] dark:text-gray-200"
-            style={{ borderWidth: '0.5px' }}
+            className="relative flex max-h-[min(90vh,720px)] w-full max-w-[600px] flex-col overflow-hidden rounded-[var(--radius-modal)] border border-hairline bg-surface text-fg shadow-[0_24px_64px_-24px_rgba(0,0,0,0.28)]"
             onClick={(event) => event.stopPropagation()}
           >
-            <header className="flex items-center justify-between gap-3 border-b border-gray-100 px-5 py-3.5 dark:border-gray-800">
-              <h2 className="text-[15px] font-semibold tracking-[-0.01em]">Add a document</h2>
+            <header className="flex items-center justify-between gap-3 border-b border-hairline px-5 py-3.5">
+              <h2 className="text-body font-semibold tracking-[-0.01em] text-fg">Add a document</h2>
               <button
                 type="button"
                 onClick={requestClose}
                 aria-label="Close"
-                className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                className="rounded-control p-1.5 text-fg-tertiary transition-colors hover:bg-surface-inset hover:text-fg"
               >
                 <X size={15} />
               </button>
             </header>
 
             <div className="px-5 pt-3">
-              <div className="flex items-center rounded-lg bg-gray-100 p-0.5 dark:bg-gray-800">
-                {(['upload', 'paste'] as const).map((value) => {
-                  const active = segment === value
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => {
-                        setSegment(value)
-                        setLocalError('')
-                      }}
-                      className={`flex-1 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
-                        active
-                          ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
-                          : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
-                      }`}
-                    >
-                      {value === 'upload' ? 'Upload file' : 'Paste text'}
-                    </button>
-                  )
-                })}
-              </div>
+              <SegmentedControl
+                ariaLabel="Document input mode"
+                options={[
+                  { value: 'upload', label: 'Upload file' },
+                  { value: 'paste', label: 'Paste text' },
+                ]}
+                value={segment}
+                onChange={(value) => {
+                  setSegment(value)
+                  setLocalError('')
+                }}
+              />
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -265,17 +258,17 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                       }}
                       onDragLeave={() => setDragOver(false)}
                       onDrop={handleDrop}
-                      className={`flex min-h-[12rem] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-5 py-8 text-center transition-[border-color,background-color,color] duration-200 ease-out ${
+                      className={`flex min-h-[12rem] cursor-pointer flex-col items-center justify-center rounded-card border border-dashed px-5 py-8 text-center transition-[border-color,background-color,color] duration-200 ease-out ${
                         dragOver
-                          ? 'border-blue-400 bg-blue-50/70 text-blue-600 dark:border-blue-500 dark:bg-blue-950/30 dark:text-blue-300'
-                          : 'border-gray-300 bg-gray-50/50 text-gray-500 hover:border-gray-400 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#1E1E20] dark:hover:border-gray-600'
+                          ? 'border-accent bg-accent/5 text-accent'
+                          : 'border-hairline bg-surface-inset text-fg-secondary hover:border-hairline-strong'
                       }`}
                     >
                       <UploadCloud size={22} className="mb-3" />
-                      <p className="text-[14px]">
+                      <p className="text-label text-fg">
                         Drop a file here or <span className="font-medium underline">browse</span>
                       </p>
-                      <p className="mt-1.5 max-w-md text-[12px] leading-5 text-gray-400">
+                      <p className="mt-1.5 max-w-md text-caption leading-5 text-fg-tertiary">
                         PDF, DOCX, Markdown, text, CSV, HTML, XML, RTF, or email. Orbit extracts text, chunks it, and queues it for review.
                       </p>
                       <input
@@ -301,14 +294,13 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                           return (
                             <div
                               key={fileKey(file)}
-                              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-[#202024]"
-                              style={{ borderWidth: '0.5px' }}
+                              className="flex items-center gap-2 rounded-control border border-hairline bg-surface-inset px-3 py-2"
                             >
-                              <FileText size={14} className="shrink-0 text-gray-400" />
-                              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-gray-700 dark:text-gray-300">
+                              <FileText size={14} className="shrink-0 text-fg-tertiary" />
+                              <span className="min-w-0 flex-1 truncate text-label font-medium text-fg-secondary">
                                 {file.name}
                               </span>
-                              <span className="shrink-0 text-[11px] tabular-nums text-gray-400">
+                              <span className="shrink-0 text-caption tabular-nums text-fg-tertiary">
                                 {formatBytes(file.size)}
                               </span>
                               <span className={uploadStatusClass(status)}>
@@ -318,7 +310,7 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                                 type="button"
                                 disabled={status === 'uploading'}
                                 onClick={() => removeFile(file)}
-                                className="text-gray-400 transition-colors hover:text-gray-600 disabled:opacity-30 dark:hover:text-gray-200"
+                                className="text-fg-tertiary transition-colors hover:text-fg disabled:opacity-30"
                                 aria-label={`Remove ${file.name}`}
                               >
                                 <X size={14} />
@@ -339,7 +331,7 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                     className="grid gap-3"
                   >
                     <label className="grid gap-1.5">
-                      <span className="text-[11px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                      <span className="text-caption font-medium uppercase tracking-wider text-fg-secondary">
                         Name
                       </span>
                       <input
@@ -347,11 +339,11 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                         value={name}
                         onChange={(event) => setName(event.target.value)}
                         placeholder="orbit_notes"
-                        className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[14px] outline-none transition-colors focus:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-200 dark:focus:border-gray-600"
+                        className="rounded-control border border-hairline bg-surface-inset px-3 py-2 text-label text-fg outline-none transition-colors focus:border-hairline-strong"
                       />
                     </label>
                     <label className="grid gap-1.5">
-                      <span className="text-[11px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                      <span className="text-caption font-medium uppercase tracking-wider text-fg-secondary">
                         Content
                       </span>
                       <textarea
@@ -359,7 +351,7 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                         onChange={(event) => setContent(event.target.value)}
                         rows={9}
                         placeholder="Paste document text here…"
-                        className="resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[13px] leading-6 outline-none transition-colors focus:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-200 dark:focus:border-gray-600"
+                        className="resize-none rounded-control border border-hairline bg-surface-inset px-3 py-2 text-label leading-6 text-fg outline-none transition-colors focus:border-hairline-strong"
                       />
                     </label>
                   </motion.div>
@@ -367,17 +359,17 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
               </AnimatePresence>
 
               {localError && (
-                <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200">
+                <p className="mt-3 rounded-control border border-danger/30 bg-danger/10 px-3 py-2 text-caption text-danger">
                   {localError}
                 </p>
               )}
             </div>
 
-            <footer className="flex items-center justify-between gap-3 border-t border-gray-100 px-5 py-3 dark:border-gray-800">
+            <footer className="flex items-center justify-between gap-3 border-t border-hairline px-5 py-3">
               <button
                 type="button"
                 onClick={requestClose}
-                className="rounded-lg px-3 py-1.5 text-[13px] text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                className="rounded-control px-3 py-1.5 text-label text-fg-secondary transition-colors hover:bg-surface-inset hover:text-fg"
               >
                 Cancel
               </button>
@@ -386,7 +378,7 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                   type="button"
                   disabled={pendingFiles.length === 0 || uploading}
                   onClick={() => void handleUpload()}
-                  className="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-[13px] font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+                  className="inline-flex items-center gap-2 rounded-control bg-accent px-4 py-2 text-label font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-accent-hover active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
                 >
                   {uploading ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
                   {uploading ? 'Uploading…' : 'Upload'}
@@ -396,7 +388,7 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                   type="button"
                   disabled={!name.trim() || !content.trim() || saving}
                   onClick={() => void handlePasteSave()}
-                  className="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-[13px] font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
+                  className="inline-flex items-center gap-2 rounded-control bg-accent px-4 py-2 text-label font-semibold text-white transition-[background-color,transform] duration-150 ease-out hover:bg-accent-hover active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
                 >
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
                   {saving ? 'Saving…' : 'Save text'}
@@ -411,21 +403,21 @@ export function AddDocumentDialog({ open, onClose, onSaved }: Props) {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 8 }}
                   transition={{ duration: 0.16, ease: easeOut }}
-                  className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 border-t border-gray-200 bg-white/95 px-5 py-3 text-[13px] backdrop-blur dark:border-gray-800 dark:bg-[#1C1C1E]/95"
+                  className="glass absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 border-t border-hairline px-5 py-3 text-label"
                 >
-                  <span className="text-gray-700 dark:text-gray-300">Discard this draft?</span>
+                  <span className="text-fg-secondary">Discard this draft?</span>
                   <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={() => setConfirmingDiscard(false)}
-                      className="rounded-lg px-3 py-1.5 text-[12px] text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800"
+                      className="rounded-control px-3 py-1.5 text-caption text-fg-secondary transition-colors hover:bg-surface-inset hover:text-fg"
                     >
                       Keep editing
                     </button>
                     <button
                       type="button"
                       onClick={discardAndClose}
-                      className="rounded-lg bg-red-500 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-red-600"
+                      className="rounded-control bg-danger px-3 py-1.5 text-caption font-medium text-white transition-colors hover:bg-danger/90"
                     >
                       Discard
                     </button>
@@ -453,8 +445,8 @@ function fileKey(file: File) {
 
 function uploadStatusClass(status: UploadStatus) {
   const base = 'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold'
-  if (status === 'done') return `${base} bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200`
-  if (status === 'error') return `${base} bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-200`
-  if (status === 'uploading') return `${base} bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200`
-  return `${base} bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400`
+  if (status === 'done') return `${base} bg-success/10 text-success`
+  if (status === 'error') return `${base} bg-danger/10 text-danger`
+  if (status === 'uploading') return `${base} bg-accent/10 text-accent`
+  return `${base} bg-surface-inset text-fg-secondary`
 }

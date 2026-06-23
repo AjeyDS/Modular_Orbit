@@ -70,10 +70,16 @@ def test_explicit_add_still_works_inside_a_question_form() -> None:
 def test_fast_mode_attaches_no_buckets(tmp_path) -> None:
     _ready(tmp_path)
     from app.chat.actions import _build_answer_context
+    from app.user_model import capture_fact, weave_user_model
+
+    capture_fact(source="manual", text="I am training for a marathon this fall")
+    weave_user_model()
+
     fast_ctx = _build_answer_context("fast", "what are my career goals")
     understanding_ctx = _build_answer_context("understanding", "what should I focus on in my career")
-    assert "Story Buckets:" not in fast_ctx
-    assert "Story Buckets:" in understanding_ctx
+    assert "User model:" not in fast_ctx
+    assert "User model:" in understanding_ctx
+    assert "marathon" in understanding_ctx
 
 
 def test_understanding_retrieval_caps_followups(tmp_path, monkeypatch) -> None:
@@ -493,6 +499,10 @@ def test_standard_chat_fallback_surfaces_retrieved_document_context(tmp_path) ->
 
 def test_context_chat_prioritizes_rag_chunks_over_recent_module_data(tmp_path) -> None:
     _ready(tmp_path)
+    from app.user_model import capture_fact, weave_user_model
+
+    capture_fact(source="manual", text="I work on RAG pipelines and machine learning")
+    weave_user_model()
     document = create_document(
         DocumentCreate(
             original_name="Resume.pdf",
@@ -506,8 +516,8 @@ def test_context_chat_prioritizes_rag_chunks_over_recent_module_data(tmp_path) -
     context = _build_answer_context("understanding", "What does my resume say about RAG?")
 
     assert "Knowledge Chunks:" in context
-    assert "Story Buckets:" in context
-    assert context.index("Knowledge Chunks:") < context.index("Story Buckets:")
+    assert "User model:" in context
+    assert context.index("Knowledge Chunks:") < context.index("User model:")
     assert "- From Resume.pdf" in context
 
     remove_document(document.id)

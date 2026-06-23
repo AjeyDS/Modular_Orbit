@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -20,7 +21,9 @@ from app.modules.curious import (
     weave_pending_curious_updates,
 )
 from app.modules.logs import LogCreate, create_log
-from app.user_model import list_goals
+from app.user_model import build_user_model_context, list_goals
+
+logger = logging.getLogger(__name__)
 
 
 class CompanionMessage(BaseModel):
@@ -204,21 +207,25 @@ def record_user_turn(
                 (log.id,),
             )
 
+    # Capture the raw answer as a companion fact (best-effort, post-commit). The
+    # companion-capture log above no longer emits its own life_item fact, so this
+    # is the single fact for this meaningful reply.
+    try:
+        from app.user_model import capture_fact
+        capture_fact(
+            source="companion",
+            text=text,
+            ref={"session_id": str(session_id), "message_id": str(message_id)},
+        )
+    except Exception:
+        logger.warning("Failed to capture companion fact for session %s", session_id, exc_info=True)
+
 
 def build_companion_context() -> str:
     sections: list[str] = []
 
     with transaction() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT stable_key, display_name, description, content
-                FROM story_buckets
-                WHERE status = 'active'
-                ORDER BY display_name
-                """
-            )
-            bucket_rows = cur.fetchall()
             cur.execute(
                 """
                 SELECT title
@@ -255,12 +262,9 @@ def build_companion_context() -> str:
             )
             recent_rows = cur.fetchall()
 
-    if bucket_rows:
-        lines = []
-        for row in bucket_rows:
-            content = (row.get("content") or "")[:400].strip()
-            lines.append(f"- {row['display_name']}: {row['description']}\n{content}")
-        sections.append("Story Buckets:\n" + "\n".join(lines))
+    user_model = build_user_model_context(budget=1800)
+    if user_model.strip():
+        sections.append("User model:\n" + user_model)
 
     goals = list_goals()
     if goals:

@@ -6,7 +6,6 @@ live in the task_items Side Table.
 
 from __future__ import annotations
 
-import calendar
 import hashlib
 import json
 from datetime import date, datetime, timezone
@@ -27,15 +26,12 @@ from app.lifecycle import (
 )
 from app.llm import LLMUnavailable, generate_json
 from app.rag import retrieve_chunks
-from app.user_model import list_goals, list_story_bucket_items
-
-DueWindow = Literal["this_week", "this_month", "someday", "exact"]
+from app.user_model import build_user_model_context, list_goals
 
 
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1)
     description: str = ""
-    due_window: DueWindow = "this_week"
     due_date: date | None = None
     priority: int | None = Field(default=None, ge=1, le=5)
     module_status: str | None = None
@@ -46,7 +42,6 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1)
     description: str | None = None
-    due_window: DueWindow | None = None
     due_date: date | None = None
     priority: int | None = Field(default=None, ge=1, le=5)
     module_status: str | None = None
@@ -60,7 +55,6 @@ class TaskItem(BaseModel):
     connection_status: str
     chunk_status: str
     bucket_update_status: str
-    due_window: DueWindow
     due_date: date | None
     priority: int | None
     module_status: str | None
@@ -101,7 +95,6 @@ def create_task(payload: TaskCreate, *, review: bool = True, review_root: Path |
     request_id = payload.request_id or f"task-{uuid4().hex}"
     rewritten_title, rewritten_description, rewrite_status = _rewrite_task(payload.title, payload.description)
     item_payload = _task_payload(
-        due_window=payload.due_window,
         due_date=payload.due_date,
         priority=payload.priority,
         module_status=payload.module_status,
@@ -122,7 +115,6 @@ def create_task(payload: TaskCreate, *, review: bool = True, review_root: Path |
         },
         request_id=request_id,
         side_table_data={
-            "due_window": payload.due_window,
             "due_date": payload.due_date,
             "priority": payload.priority,
             "module_status": payload.module_status,
@@ -143,14 +135,12 @@ def update_task(task_id: UUID | str, payload: TaskUpdate, *, review: bool = True
     changed_fields = payload.model_fields_set
     next_title = payload.title if "title" in changed_fields and payload.title is not None else existing.title
     next_description = payload.description if "description" in changed_fields and payload.description is not None else existing.description
-    next_due_window = payload.due_window if "due_window" in changed_fields and payload.due_window is not None else existing.due_window
     next_due_date = payload.due_date if "due_date" in changed_fields else existing.due_date
     next_priority = payload.priority if "priority" in changed_fields else existing.priority
     next_module_status = payload.module_status if "module_status" in changed_fields else existing.module_status
     original_payload = _get_life_item_payload(task_id)
 
     item_payload = _task_payload(
-        due_window=next_due_window,
         due_date=next_due_date,
         priority=next_priority,
         module_status=next_module_status,
@@ -191,14 +181,13 @@ def update_task(task_id: UUID | str, payload: TaskUpdate, *, review: bool = True
             cur.execute(
                 """
                 UPDATE task_items
-                SET due_window = %s,
-                    due_date = %s,
+                SET due_date = %s,
                     priority = %s,
                     module_status = %s,
                     updated_at = now()
                 WHERE life_item_id = %s
                 """,
-                (next_due_window, next_due_date, next_priority, next_module_status, task_id),
+                (next_due_date, next_priority, next_module_status, task_id),
             )
 
     if review:
@@ -296,7 +285,7 @@ def list_tasks(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT li.*, ti.due_window, ti.due_date, ti.priority, ti.module_status, ti.completed_at
+                SELECT li.*, ti.due_date, ti.priority, ti.module_status, ti.completed_at
                 FROM life_items li
                 JOIN task_items ti ON ti.life_item_id = li.id
                 JOIN module_instances mi ON mi.id = li.module_instance_id
@@ -305,13 +294,6 @@ def list_tasks(
                     AND (%(status)s::text IS NULL OR li.lifecycle_status = %(status)s)
                 ORDER BY
                     ti.completed_at DESC NULLS LAST,
-                    CASE ti.due_window
-                        WHEN 'this_week' THEN 0
-                        WHEN 'exact' THEN 1
-                        WHEN 'this_month' THEN 2
-                        WHEN 'someday' THEN 3
-                        ELSE 4
-                    END,
                     ti.due_date ASC NULLS LAST,
                     li.created_at DESC
                 LIMIT %(limit)s
@@ -357,7 +339,7 @@ def generate_task_priority_suggestion() -> TaskPrioritySuggestionState:
             _priority_prompt(active_tasks, context_summary),
             system=(
                 "You are Orbit's Tasks focus advisor. Rank active tasks by what the person "
-                "should focus on next using goals, story buckets, recent activity, and task details. "
+                "should focus on next using goals, the user model, recent activity, and task details. "
                 "Return only valid JSON with ranked and skippable arrays."
             ),
             temperature=0.2,
@@ -453,7 +435,7 @@ def get_task(task_id: UUID | str) -> TaskItem:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT li.*, ti.due_window, ti.due_date, ti.priority, ti.module_status, ti.completed_at
+                SELECT li.*, ti.due_date, ti.priority, ti.module_status, ti.completed_at
                 FROM life_items li
                 JOIN task_items ti ON ti.life_item_id = li.id
                 JOIN module_instances mi ON mi.id = li.module_instance_id
@@ -478,7 +460,6 @@ def _row_to_task(row: dict[str, Any]) -> TaskItem:
         connection_status=row["connection_status"],
         chunk_status=row["chunk_status"],
         bucket_update_status=row["bucket_update_status"],
-        due_window=row["due_window"],
         due_date=row["due_date"],
         priority=row["priority"],
         module_status=row["module_status"],
@@ -517,15 +498,6 @@ def _task_priority_context_summary() -> dict[str, Any]:
         for goal in list_goals()
         if goal.status == "active"
     ]
-    buckets = [
-        {
-            "id": str(bucket.id),
-            "name": bucket.display_name,
-            "description": bucket.description,
-            "content": bucket.content[:1400],
-        }
-        for bucket in list_story_bucket_items()
-    ]
     recent_logs = _recent_life_items("logs", limit=5)
     recent_plans = _recent_life_items("plans", limit=5)
     chunks = [
@@ -540,7 +512,7 @@ def _task_priority_context_summary() -> dict[str, Any]:
     ]
     return {
         "active_goals": goals,
-        "story_buckets": buckets,
+        "user_model": build_user_model_context(budget=1800),
         "recent_logs": recent_logs,
         "recent_plans": recent_plans,
         "relevant_chunks": chunks,
@@ -711,7 +683,6 @@ def _task_snapshot_hash(tasks: list[TaskItem]) -> str:
             "id": str(task.id),
             "title": task.title,
             "description": task.description,
-            "due_window": task.due_window,
             "due_date": task.due_date.isoformat() if task.due_date else None,
             "priority": task.priority,
             "module_status": task.module_status,
@@ -733,7 +704,6 @@ def _suggestion_text(
 
 def _task_payload(
     *,
-    due_window: DueWindow,
     due_date: date | None,
     priority: int | None,
     module_status: str | None,
@@ -742,7 +712,6 @@ def _task_payload(
     rewrite_status: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "due_window": due_window,
         "due_date": due_date.isoformat() if due_date else None,
         "priority": priority,
         "module_status": module_status,
@@ -753,20 +722,7 @@ def _task_payload(
 
 
 def _effective_due_date(task: TaskItem) -> date | None:
-    today = date.today()
-    if task.due_window == "someday":
-        return None
-    if task.due_window == "this_week":
-        return today + _week_delta(today)
-    if task.due_window == "this_month":
-        return date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
     return task.due_date
-
-
-def _week_delta(today: date):
-    from datetime import timedelta
-
-    return timedelta(days=6 - today.weekday())
 
 
 def _rewrite_task(title: str, description: str) -> tuple[str, str, str]:
@@ -775,7 +731,7 @@ def _rewrite_task(title: str, description: str) -> tuple[str, str, str]:
         response = generate_json(
             _rewrite_prompt(title, description, context),
             system=(
-                "You reorganize a freshly captured task using the person's goals and story buckets. "
+                "You reorganize a freshly captured task using the person's goals and user model. "
                 "Produce a short, clean imperative title and an organized body. Return only JSON: "
                 '{"title": str, "description": str}.'
             ),

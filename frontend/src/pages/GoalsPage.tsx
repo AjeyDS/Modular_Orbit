@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
-import { ArrowUpCircle, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { AnimatePresence } from 'framer-motion'
+import { ArrowUpCircle, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import {
   createGoal,
   deleteGoal,
@@ -11,6 +11,16 @@ import {
   type GoalItem,
   type GoalStatus,
 } from '../lib/api'
+import {
+  CollectionRow,
+  Composer,
+  EditableTitle,
+  Pill,
+  RowActions,
+  SegmentedControl,
+  SkeletonRows,
+  useToast,
+} from '../components/ui'
 import { pageContentClass } from '../layout/pageShell'
 
 type GoalDraft = {
@@ -31,14 +41,31 @@ const emptyDraft = (): GoalDraft => ({
   target_note: '',
 })
 
+const statusOptions: { value: GoalStatus; label: string }[] = [
+  { value: 'active', label: 'Active' },
+  { value: 'tentative', label: 'Tentative' },
+]
+
+const horizonOptions: { value: GoalHorizon; label: string }[] = [
+  { value: 'short_term', label: 'Short-term' },
+  { value: 'long_term', label: 'Long-term' },
+]
+
+// Render an ISO date (YYYY-MM-DD) as a human-friendly "Jun 25".
+function formatTargetDate(value: string) {
+  return new Date(`${value}T00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 export default function GoalsPage() {
   const [goals, setGoals] = useState<GoalItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [draft, setDraft] = useState<GoalDraft>(emptyDraft)
+  const [newTitle, setNewTitle] = useState('')
+  const [composerStatus, setComposerStatus] = useState<GoalStatus>('tentative')
+  const [composerHorizon, setComposerHorizon] = useState<GoalHorizon>('long_term')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<GoalDraft>(emptyDraft)
+  const { toast, undoToast } = useToast()
 
   async function loadGoals() {
     setLoading(true)
@@ -56,44 +83,39 @@ export default function GoalsPage() {
     void loadGoals()
   }, [])
 
-  const activeGoals = useMemo(() => goals.filter((g) => g.status === 'active'), [goals])
-  const tentativeGoals = useMemo(() => goals.filter((g) => g.status === 'tentative'), [goals])
+  const activeGoals = useMemo(() => sortGoals(goals.filter((g) => g.status === 'active')), [goals])
+  const tentativeGoals = useMemo(() => sortGoals(goals.filter((g) => g.status === 'tentative')), [goals])
 
-  async function submitNewGoal(event?: FormEvent) {
-    event?.preventDefault()
-    const title = draft.title.trim()
-    if (!title || saving) return
+  // Optimistic create through the kit composer; defaults to tentative + long_term
+  // so a bare title + Enter/Plus adds. Reconcile to the server item on success.
+  async function handleAdd() {
+    const title = newTitle.trim()
+    if (!title) return
 
     const optimistic: GoalItem = {
       goal_id: `temp-${Date.now()}`,
       title,
-      body: draft.body.trim(),
-      status: draft.status,
-      horizon: draft.horizon,
-      target_date: draft.target_date || null,
-      target_note: draft.target_note.trim() || null,
+      body: '',
+      status: composerStatus,
+      horizon: composerHorizon,
+      target_date: null,
+      target_note: null,
     }
 
-    setSaving(true)
     setError('')
     setGoals((current) => [...current, optimistic])
-    setDraft(emptyDraft())
+    setNewTitle('')
 
     try {
       const created = await createGoal({
         title,
-        body: optimistic.body || undefined,
-        status: draft.status,
-        horizon: draft.horizon,
-        target_date: draft.target_date || null,
-        target_note: optimistic.target_note,
+        status: composerStatus,
+        horizon: composerHorizon,
       })
       setGoals((current) => current.map((g) => (g.goal_id === optimistic.goal_id ? created : g)))
     } catch (err) {
       setGoals((current) => current.filter((g) => g.goal_id !== optimistic.goal_id))
-      setError(err instanceof Error ? err.message : 'Unable to create goal')
-    } finally {
-      setSaving(false)
+      toast({ message: err instanceof Error ? err.message : 'Unable to create goal', tone: 'danger' })
     }
   }
 
@@ -109,6 +131,8 @@ export default function GoalsPage() {
     })
   }
 
+  // Optimistic edit-save: patch local state (may move the goal between the
+  // Active / Tentative groups), persist in the background, reconcile on error.
   async function saveEdit(goalId: string) {
     const title = editDraft.title.trim()
     if (!title) return
@@ -122,27 +146,29 @@ export default function GoalsPage() {
       target_note: editDraft.target_note.trim() || null,
     }
 
-    setGoals((current) =>
-      current.map((g) =>
-        g.goal_id === goalId
-          ? {
-              ...g,
-              ...patch,
-            }
-          : g,
-      ),
-    )
+    setGoals((current) => current.map((g) => (g.goal_id === goalId ? { ...g, ...patch } : g)))
     setEditingId(null)
 
     try {
       const updated = await updateGoal(goalId, patch)
       setGoals((current) => current.map((g) => (g.goal_id === goalId ? updated : g)))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to update goal')
+      toast({ message: err instanceof Error ? err.message : 'Unable to update goal', tone: 'danger' })
       await loadGoals()
     }
   }
 
+  // Optimistic quick rename from the row title.
+  function handleRename(goalId: string, title: string) {
+    setGoals((current) => current.map((g) => (g.goal_id === goalId ? { ...g, title } : g)))
+    void updateGoal(goalId, { title }).catch((err) => {
+      toast({ message: err instanceof Error ? err.message : 'Unable to rename goal', tone: 'danger' })
+      void loadGoals()
+    })
+  }
+
+  // Optimistic promote: flip status to active (moves the goal from Tentative to
+  // Active), then reconcile to the server item.
   async function handlePromote(goalId: string) {
     setGoals((current) =>
       current.map((g) => (g.goal_id === goalId ? { ...g, status: 'active' as const } : g)),
@@ -151,31 +177,47 @@ export default function GoalsPage() {
       const promoted = await promoteGoal(goalId)
       setGoals((current) => current.map((g) => (g.goal_id === goalId ? promoted : g)))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to promote goal')
+      toast({ message: err instanceof Error ? err.message : 'Unable to promote goal', tone: 'danger' })
       await loadGoals()
     }
   }
 
-  async function handleDelete(goalId: string) {
-    if (!confirm('Delete this goal?')) return
-    setGoals((current) => current.filter((g) => g.goal_id !== goalId))
-    try {
-      await deleteGoal(goalId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to delete goal')
-      await loadGoals()
-    }
+  // Optimistic delete + undo: drop immediately, restore at the original index on
+  // undo, persist the deletion on commit.
+  function handleDelete(goal: GoalItem) {
+    const removed = goal
+    const index = goals.findIndex((g) => g.goal_id === removed.goal_id)
+    if (editingId === removed.goal_id) setEditingId(null)
+
+    setGoals((current) => current.filter((g) => g.goal_id !== removed.goal_id))
+
+    undoToast({
+      message: 'Goal deleted',
+      onUndo: () => {
+        setGoals((current) => {
+          const next = [...current]
+          next.splice(Math.min(index < 0 ? next.length : index, next.length), 0, removed)
+          return next
+        })
+      },
+      onCommit: () => {
+        void deleteGoal(removed.goal_id).catch((err) => {
+          toast({ message: err instanceof Error ? err.message : 'Unable to delete goal', tone: 'danger' })
+          void loadGoals()
+        })
+      },
+    })
   }
 
   return (
-    <div className="min-h-[calc(100vh-3rem)] bg-gray-50 text-gray-800 dark:bg-[#18181A] dark:text-gray-200">
+    <div className="min-h-[calc(100vh-3rem)] bg-bg text-fg">
       <div className={`${pageContentClass} py-7`}>
         <header className="mb-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900 dark:text-gray-100">Goals</h1>
-            <p className="text-[12px] text-gray-500 dark:text-gray-500">
+            <h1 className="text-title font-semibold tracking-[-0.02em] text-fg">Goals</h1>
+            <p className="text-caption text-fg-secondary">
               <span className="tabular-nums">{activeGoals.length}</span> active
-              <span className="px-1.5 text-gray-300 dark:text-gray-700">·</span>
+              <span className="px-1.5 text-fg-tertiary">·</span>
               <span className="tabular-nums">{tentativeGoals.length}</span> tentative
             </p>
           </div>
@@ -184,61 +226,80 @@ export default function GoalsPage() {
             onClick={() => void loadGoals()}
             aria-label="Refresh goals"
             title="Refresh"
-            className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            className="rounded-md p-1.5 text-fg-tertiary transition-colors hover:text-fg"
           >
             <RefreshCw size={15} />
           </button>
         </header>
 
         {error && (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200">
+          <div className="mb-3 rounded-control border border-danger/30 bg-danger/10 px-4 py-3 text-label text-danger">
             {error}
           </div>
         )}
 
-        <section
-          className="mb-5 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
-          style={{ borderWidth: '0.5px' }}
-        >
-          <GoalComposer
-            title={draft.title}
-            status={draft.status}
-            horizon={draft.horizon}
-            saving={saving}
-            onTitleChange={(title) => setDraft((current) => ({ ...current, title }))}
-            onStatusChange={(status) => setDraft((current) => ({ ...current, status }))}
-            onHorizonChange={(horizon) => setDraft((current) => ({ ...current, horizon }))}
-            onSubmit={(event) => void submitNewGoal(event)}
+        <div className="border-b border-hairline pb-2">
+          <Composer
+            value={newTitle}
+            onChange={setNewTitle}
+            onSubmit={handleAdd}
+            placeholder="Add a goal…"
+            bare
+            submitIcon={<Plus size={16} />}
+            trailing={
+              <div className="flex flex-wrap items-center gap-1.5">
+                <SegmentedControl
+                  options={statusOptions}
+                  value={composerStatus}
+                  onChange={setComposerStatus}
+                  ariaLabel="Goal status"
+                  size="sm"
+                />
+                <SegmentedControl
+                  options={horizonOptions}
+                  value={composerHorizon}
+                  onChange={setComposerHorizon}
+                  ariaLabel="Goal horizon"
+                  size="sm"
+                />
+              </div>
+            }
           />
-        </section>
+        </div>
 
         {loading && goals.length === 0 ? (
-          <div className="py-10 text-center text-[14px] text-gray-400">Loading goals…</div>
+          <div className="mt-4">
+            <SkeletonRows count={4} />
+          </div>
         ) : (
-          <div className="space-y-6">
+          <div className="mt-4 space-y-6">
             <GoalSection
               title="Active"
               goals={activeGoals}
+              showPromote={false}
               editingId={editingId}
               editDraft={editDraft}
               onStartEdit={startEdit}
               onCancelEdit={() => setEditingId(null)}
               onEditDraftChange={setEditDraft}
               onSaveEdit={(id) => void saveEdit(id)}
+              onRename={handleRename}
               onPromote={(id) => void handlePromote(id)}
-              onDelete={(id) => void handleDelete(id)}
+              onDelete={handleDelete}
             />
             <GoalSection
               title="Tentative"
               goals={tentativeGoals}
+              showPromote
               editingId={editingId}
               editDraft={editDraft}
               onStartEdit={startEdit}
               onCancelEdit={() => setEditingId(null)}
               onEditDraftChange={setEditDraft}
               onSaveEdit={(id) => void saveEdit(id)}
+              onRename={handleRename}
               onPromote={(id) => void handlePromote(id)}
-              onDelete={(id) => void handleDelete(id)}
+              onDelete={handleDelete}
             />
           </div>
         )}
@@ -247,341 +308,228 @@ export default function GoalsPage() {
   )
 }
 
+function sortGoals(goals: GoalItem[]) {
+  return [...goals].sort((a, b) => {
+    if (a.horizon !== b.horizon) {
+      return a.horizon === 'short_term' ? -1 : 1
+    }
+    return a.title.localeCompare(b.title)
+  })
+}
+
 function GoalSection({
   title,
   goals,
+  showPromote,
   editingId,
   editDraft,
   onStartEdit,
   onCancelEdit,
   onEditDraftChange,
   onSaveEdit,
+  onRename,
   onPromote,
   onDelete,
 }: {
   title: string
   goals: GoalItem[]
+  showPromote: boolean
   editingId: string | null
   editDraft: GoalDraft
   onStartEdit: (goal: GoalItem) => void
   onCancelEdit: () => void
   onEditDraftChange: (draft: GoalDraft) => void
   onSaveEdit: (goalId: string) => void
+  onRename: (goalId: string, title: string) => void
   onPromote: (goalId: string) => void
-  onDelete: (goalId: string) => void
+  onDelete: (goal: GoalItem) => void
 }) {
-  const sortedGoals = [...goals].sort((a, b) => {
-    if (a.horizon !== b.horizon) {
-      return a.horizon === 'short_term' ? -1 : 1
-    }
-    return a.title.localeCompare(b.title)
-  })
-
-  if (goals.length === 0) {
-    return (
-      <section
-        className="rounded-2xl border border-dashed border-gray-200 bg-white/60 px-6 py-8 text-center dark:border-gray-700 dark:bg-[#1C1C1E]/60"
-        style={{ borderWidth: '0.5px' }}
-      >
-        <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">{title}</p>
-        <p className="mt-2 text-[13px] text-gray-500 dark:text-gray-500">No {title.toLowerCase()} goals yet.</p>
-      </section>
-    )
-  }
-
   return (
-    <section
-      className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
-      style={{ borderWidth: '0.5px' }}
-    >
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">{title}</p>
-        <HorizonLegend />
-      </div>
-      <div className="divide-y divide-gray-100 dark:divide-gray-800">
-        {sortedGoals.map((goal) => (
-          <GoalRow
-            key={goal.goal_id}
-            goal={goal}
-            editing={editingId === goal.goal_id}
-            editDraft={editDraft}
-            onStartEdit={() => onStartEdit(goal)}
-            onCancelEdit={onCancelEdit}
-            onEditDraftChange={onEditDraftChange}
-            onSaveEdit={() => onSaveEdit(goal.goal_id)}
-            onPromote={() => onPromote(goal.goal_id)}
-            onDelete={() => onDelete(goal.goal_id)}
-            showPromote={title === 'Tentative'}
-          />
-        ))}
-      </div>
+    <section>
+      <p className="mb-1 text-caption font-medium uppercase tracking-wider text-fg-tertiary">{title}</p>
+      {goals.length === 0 ? (
+        <p className="py-2 text-caption text-fg-tertiary">No {title.toLowerCase()} goals yet.</p>
+      ) : (
+        <div className="divide-y divide-hairline">
+          <AnimatePresence initial={false}>
+            {goals.map((goal) => (
+              <GoalRow
+                key={goal.goal_id}
+                goal={goal}
+                editing={editingId === goal.goal_id}
+                editDraft={editDraft}
+                showPromote={showPromote}
+                onStartEdit={() => onStartEdit(goal)}
+                onCancelEdit={onCancelEdit}
+                onEditDraftChange={onEditDraftChange}
+                onSaveEdit={() => onSaveEdit(goal.goal_id)}
+                onRename={(title) => onRename(goal.goal_id, title)}
+                onPromote={() => onPromote(goal.goal_id)}
+                onDelete={() => onDelete(goal)}
+              />
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
     </section>
   )
 }
 
-function GoalComposer({
-  title,
-  status,
-  horizon,
-  saving,
-  onTitleChange,
-  onStatusChange,
-  onHorizonChange,
-  onSubmit,
-}: {
-  title: string
-  status: GoalStatus
-  horizon: GoalHorizon
-  saving: boolean
-  onTitleChange: (value: string) => void
-  onStatusChange: (value: GoalStatus) => void
-  onHorizonChange: (value: GoalHorizon) => void
-  onSubmit: (event?: FormEvent) => void
-}) {
-  return (
-    <form
-      onSubmit={onSubmit}
-      className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
-      style={{ borderWidth: '0.5px' }}
-    >
-      <span className="text-gray-300 dark:text-gray-600">＋</span>
-      <input
-        value={title}
-        onChange={(event) => onTitleChange(event.target.value)}
-        placeholder="Add a goal…"
-        className="min-w-0 flex-1 bg-transparent text-[14px] text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
-      />
-      <StatusToggle value={status} onChange={onStatusChange} compact />
-      <HorizonToggle value={horizon} onChange={onHorizonChange} compact />
-      <button
-        type="submit"
-        disabled={saving || !title.trim()}
-        className="rounded-lg bg-blue-500 px-3 py-1.5 text-[13px] font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40"
-      >
-        {saving ? 'Adding…' : 'Add'}
-      </button>
-    </form>
+function HorizonPill({ horizon }: { horizon: GoalHorizon }) {
+  return horizon === 'short_term' ? (
+    <Pill tone="warn">short-term</Pill>
+  ) : (
+    <Pill tone="neutral">long-term</Pill>
   )
-}
-
-function HorizonLegend() {
-  return (
-    <div className="flex items-center gap-3 text-[11px] text-gray-400 dark:text-gray-500">
-      <span className="inline-flex items-center gap-1.5">
-        <span className="h-2 w-2 rounded-full bg-amber-400 dark:bg-amber-300" />
-        Short-term
-      </span>
-      <span className="inline-flex items-center gap-1.5">
-        <span className="h-2 w-2 rounded-full bg-violet-400 dark:bg-violet-300" />
-        Long-term
-      </span>
-    </div>
-  )
-}
-
-function horizonAccentClass(horizon: GoalHorizon) {
-  return horizon === 'short_term'
-    ? 'border-l-amber-400 dark:border-l-amber-300'
-    : 'border-l-violet-400 dark:border-l-violet-300'
 }
 
 function GoalRow({
   goal,
   editing,
   editDraft,
+  showPromote,
   onStartEdit,
   onCancelEdit,
   onEditDraftChange,
   onSaveEdit,
+  onRename,
   onPromote,
   onDelete,
-  showPromote,
 }: {
   goal: GoalItem
   editing: boolean
   editDraft: GoalDraft
+  showPromote: boolean
   onStartEdit: () => void
   onCancelEdit: () => void
   onEditDraftChange: (draft: GoalDraft) => void
   onSaveEdit: () => void
+  onRename: (title: string) => void
   onPromote: () => void
   onDelete: () => void
-  showPromote: boolean
 }) {
   if (editing) {
     return (
-      <article className={`border-l-2 py-3 pl-3 ${horizonAccentClass(editDraft.horizon)}`}>
-        <div className="space-y-2">
+      <CollectionRow variant="plain">
+        <div className="space-y-2 rounded-control bg-surface-inset p-3">
           <input
             value={editDraft.title}
             onChange={(event) => onEditDraftChange({ ...editDraft, title: event.target.value })}
-            className="w-full rounded-lg bg-gray-100 px-3 py-1.5 text-[13px] outline-none focus:bg-white focus:ring-1 focus:ring-gray-300 dark:bg-gray-800 dark:focus:bg-[#1E1E20] dark:focus:ring-gray-700"
+            placeholder="Goal title"
+            className="w-full rounded-control bg-surface px-3 py-1.5 text-body text-fg outline-none transition-shadow focus:ring-1 focus:ring-hairline-strong"
           />
           <textarea
             value={editDraft.body}
             onChange={(event) => onEditDraftChange({ ...editDraft, body: event.target.value })}
             rows={2}
-            className="w-full resize-none rounded-lg bg-gray-100 px-3 py-1.5 text-[13px] leading-6 outline-none focus:bg-white focus:ring-1 focus:ring-gray-300 dark:bg-gray-800 dark:focus:bg-[#1E1E20] dark:focus:ring-gray-700"
+            placeholder="Notes"
+            className="w-full resize-none rounded-control bg-surface px-3 py-1.5 text-label leading-6 text-fg outline-none transition-shadow focus:ring-1 focus:ring-hairline-strong placeholder:text-fg-tertiary"
           />
           <div className="flex flex-wrap items-center gap-2">
-            <StatusToggle
+            <SegmentedControl
+              options={statusOptions}
               value={editDraft.status}
               onChange={(status) => onEditDraftChange({ ...editDraft, status })}
+              ariaLabel="Goal status"
+              size="sm"
             />
-            <HorizonToggle
+            <SegmentedControl
+              options={horizonOptions}
               value={editDraft.horizon}
               onChange={(horizon) => onEditDraftChange({ ...editDraft, horizon })}
+              ariaLabel="Goal horizon"
+              size="sm"
             />
             <input
               type="date"
               value={editDraft.target_date}
               onChange={(event) => onEditDraftChange({ ...editDraft, target_date: event.target.value })}
-              className="rounded-lg bg-gray-100 px-2 py-1 text-[12px] outline-none dark:bg-gray-800"
+              className="rounded-control bg-surface px-2 py-1 text-caption text-fg outline-none"
             />
             <input
               value={editDraft.target_note}
               onChange={(event) => onEditDraftChange({ ...editDraft, target_note: event.target.value })}
               placeholder="Timeframe note"
-              className="min-w-0 flex-1 rounded-lg bg-gray-100 px-2 py-1 text-[12px] outline-none dark:bg-gray-800"
+              className="min-w-0 flex-1 rounded-control bg-surface px-2 py-1 text-caption text-fg outline-none placeholder:text-fg-tertiary"
             />
+          </div>
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onSaveEdit}
-              className="rounded-lg bg-blue-500 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-blue-600"
+              className="rounded-control bg-accent px-3 py-1 text-label font-medium text-white transition-colors hover:bg-accent-hover"
             >
               Save
             </button>
             <button
               type="button"
               onClick={onCancelEdit}
-              className="rounded-lg px-2.5 py-1 text-[12px] text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
+              className="rounded-control px-3 py-1 text-label text-fg-secondary transition-colors hover:text-fg"
             >
               Cancel
             </button>
           </div>
         </div>
-      </article>
+      </CollectionRow>
     )
   }
 
   return (
-    <article
-      className={`group flex items-start justify-between gap-3 border-l-2 py-3 pl-3 ${horizonAccentClass(goal.horizon)}`}
-    >
-      <div className="min-w-0 flex-1">
-        <h3 className="text-[14px] font-medium text-gray-900 dark:text-gray-100">{goal.title}</h3>
-        {goal.body && (
-          <p className="mt-1 text-[13px] leading-6 text-gray-500 dark:text-gray-400">{goal.body}</p>
-        )}
-        {(goal.target_date || goal.target_note) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
-            {goal.target_date && <span className="tabular-nums">Target {goal.target_date}</span>}
-            {goal.target_note && <span>{goal.target_note}</span>}
+    <CollectionRow variant="plain">
+      <div className="flex items-start justify-between gap-3 px-1 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <EditableTitle
+              value={goal.title}
+              onSave={onRename}
+              className="max-w-full truncate text-body font-medium leading-snug text-fg"
+            />
+            <HorizonPill horizon={goal.horizon} />
           </div>
-        )}
+          {goal.body && (
+            <p className="mt-1 text-label leading-6 text-fg-secondary">{goal.body}</p>
+          )}
+          {(goal.target_date || goal.target_note) && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-caption text-fg-tertiary">
+              {goal.target_date && (
+                <span className="tabular-nums">Target {formatTargetDate(goal.target_date)}</span>
+              )}
+              {goal.target_note && <span>{goal.target_note}</span>}
+            </div>
+          )}
+        </div>
+        <RowActions className="self-start pt-0.5">
+          {showPromote && (
+            <button
+              type="button"
+              onClick={onPromote}
+              title="Promote to active"
+              aria-label={`Promote ${goal.title} to active`}
+              className="text-fg-tertiary transition-colors hover:text-accent"
+            >
+              <ArrowUpCircle size={14} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onStartEdit}
+            title="Edit goal"
+            aria-label={`Edit ${goal.title}`}
+            className="text-fg-tertiary transition-colors hover:text-fg"
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Delete goal"
+            aria-label={`Delete ${goal.title}`}
+            className="text-fg-tertiary transition-colors hover:text-danger"
+          >
+            <Trash2 size={14} />
+          </button>
+        </RowActions>
       </div>
-      <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-        {showPromote && (
-          <button
-            type="button"
-            onClick={onPromote}
-            title="Promote to active"
-            className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-blue-500 dark:hover:bg-gray-800"
-          >
-            <ArrowUpCircle size={14} />
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={onStartEdit}
-          title="Edit goal"
-          className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-        >
-          <Pencil size={14} />
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          title="Delete goal"
-          className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-red-500 dark:hover:bg-gray-800"
-        >
-          <Trash2 size={14} />
-        </button>
-      </div>
-    </article>
-  )
-}
-
-function StatusToggle({
-  value,
-  onChange,
-  compact = false,
-}: {
-  value: GoalStatus
-  onChange: (status: GoalStatus) => void
-  compact?: boolean
-}) {
-  return (
-    <div className="flex rounded-lg bg-gray-100 p-0.5 dark:bg-gray-800">
-      {(['active', 'tentative'] as const).map((status) => {
-        const active = value === status
-        const activeClass =
-          status === 'active'
-            ? active
-              ? 'bg-emerald-100 text-emerald-900 shadow-sm dark:bg-emerald-950/50 dark:text-emerald-100'
-              : 'text-gray-500 dark:text-gray-400'
-            : active
-              ? 'bg-slate-200 text-slate-800 shadow-sm dark:bg-slate-700 dark:text-slate-100'
-              : 'text-gray-500 dark:text-gray-400'
-        return (
-          <button
-            key={status}
-            type="button"
-            onClick={() => onChange(status)}
-            className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${activeClass}`}
-          >
-            {status === 'active' ? 'Active' : compact ? 'Tent.' : 'Tentative'}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-function HorizonToggle({
-  value,
-  onChange,
-  compact = false,
-}: {
-  value: GoalHorizon
-  onChange: (horizon: GoalHorizon) => void
-  compact?: boolean
-}) {
-  return (
-    <div className="flex rounded-lg bg-gray-100 p-0.5 dark:bg-gray-800">
-      {(['short_term', 'long_term'] as const).map((horizon) => {
-        const active = value === horizon
-        const shortLabel = compact ? 'Short' : 'Short-term'
-        const longLabel = compact ? 'Long' : 'Long-term'
-        const activeClass =
-          horizon === 'short_term'
-            ? active
-              ? 'bg-amber-100 text-amber-900 shadow-sm dark:bg-amber-950/50 dark:text-amber-100'
-              : 'text-gray-500 dark:text-gray-400'
-            : active
-              ? 'bg-violet-100 text-violet-900 shadow-sm dark:bg-violet-950/50 dark:text-violet-100'
-              : 'text-gray-500 dark:text-gray-400'
-        return (
-          <button
-            key={horizon}
-            type="button"
-            onClick={() => onChange(horizon)}
-            className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${activeClass}`}
-          >
-            {horizon === 'short_term' ? shortLabel : longLabel}
-          </button>
-        )
-      })}
-    </div>
+    </CollectionRow>
   )
 }

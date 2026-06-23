@@ -103,7 +103,7 @@ def test_curious_answer_writes_direct_connection_chunk_and_bucket_update(tmp_pat
     assert update["source_event"]["foundational"] is True
 
 
-def test_curious_completion_weaves_summary_into_bucket_files(tmp_path) -> None:
+def test_curious_completion_succeeds_without_auto_weave(tmp_path) -> None:
     _ready(tmp_path)
     state = get_onboarding_state()
 
@@ -129,11 +129,22 @@ def test_curious_completion_weaves_summary_into_bucket_files(tmp_path) -> None:
     assert len(completed.summary) == 5
     assert completed.preview
     assert all(group.lines for group in completed.preview)
+
+    # The legacy automatic per-bucket weave on completion has been unwired: the
+    # onboarding bucket_updates remain pending and are NOT folded into the bucket
+    # content automatically (the manual weave handles that now).
     with connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT content FROM story_buckets WHERE stable_key = 'career'")
-            career_content = cur.fetchone()["content"]
-    assert "Person is mid-career and focused on building expertise." in career_content
+            cur.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM bucket_updates
+                WHERE source_event ->> 'source' = 'curious_onboarding'
+                    AND status = 'pending'
+                """
+            )
+            pending_onboarding = cur.fetchone()["count"]
+    assert pending_onboarding >= 1
 
     page_state = get_curious_page_state()
     assert page_state.pending_count == 10
@@ -226,8 +237,12 @@ def test_curious_bay_session_weaves_pending_bay_updates(tmp_path) -> None:
 
     result = weave_pending_curious_updates()
 
+    # The automatic per-bucket weave on onboarding completion has been unwired, so
+    # the onboarding 'career' update is still pending when the bay answer is added.
+    # The explicit weave_pending_curious_updates() now merges both pending updates
+    # for the career bucket (onboarding + bay) in one pass.
     assert len(result.results) == 1
-    assert result.results[0].merged_count == 1
+    assert result.results[0].merged_count == 2
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT content FROM story_buckets WHERE stable_key = 'career'")

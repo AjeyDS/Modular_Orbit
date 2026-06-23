@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
-import { CalendarDays, CheckCircle2, ChevronDown, ListTodo, RotateCcw, Sparkles, Trash2, X } from 'lucide-react'
+import { CalendarDays, CheckCircle2, ChevronDown, ListTodo, Plus, RotateCcw, Sparkles, Trash2, X } from 'lucide-react'
 import {
   completeTask,
   createTask,
@@ -17,10 +16,23 @@ import {
   type TaskPrioritySuggestionState,
 } from '../lib/api'
 import { AsyncStatusPills } from '../components/status'
+import {
+  CollectionRow,
+  CollectionView,
+  Composer,
+  EditableTitle,
+  EmptyState,
+  FilterTabs,
+  Pill,
+  RowActions,
+  Skeleton,
+  useToast,
+} from '../components/ui'
 import { pageContentClass } from '../layout/pageShell'
 
 type TaskFilter = Extract<LifecycleStatus, 'active' | 'completed'>
-type DueWindow = TaskItem['due_window']
+
+type TaskEditPatch = { title?: string; due_date?: string | null }
 
 const emptyPrioritySuggestion: TaskPrioritySuggestionState = {
   id: null,
@@ -41,18 +53,23 @@ function todayISODate() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
+function formatDueLabel(value: string) {
+  if (value === todayISODate()) return 'Today'
+  return new Date(`${value}T00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 export default function TasksPage() {
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [activeTasks, setActiveTasks] = useState<TaskItem[]>([])
   const [completedTasks, setCompletedTasks] = useState<TaskItem[]>([])
   const [filter, setFilter] = useState<TaskFilter>('active')
   const [newTitle, setNewTitle] = useState('')
-  const [dueWindow, setDueWindow] = useState<DueWindow>('this_week')
   const [dueDate, setDueDate] = useState('')
   const [loading, setLoading] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
   const [prioritySuggestion, setPrioritySuggestion] = useState<TaskPrioritySuggestionState>(emptyPrioritySuggestion)
   const [error, setError] = useState('')
+  const { toast, undoToast } = useToast()
 
   async function load(nextFilter = filter) {
     setLoading(true)
@@ -121,8 +138,8 @@ export default function TasksPage() {
             b.lifecycle_status === 'active' && rankedIndex.has(b.id) ? rankedIndex.get(b.id)! : Number.POSITIVE_INFINITY
           if (aRank !== bRank) return aRank - bRank
         }
-        const aDue = effectiveDueSort(a)
-        const bDue = effectiveDueSort(b)
+        const aDue = a.due_date
+        const bDue = b.due_date
         if (aDue && bDue) return aDue.localeCompare(bDue)
         if (aDue) return -1
         if (bDue) return 1
@@ -137,14 +154,12 @@ export default function TasksPage() {
     [activeTasks, todayISO],
   )
 
-  async function handleAdd(event?: FormEvent) {
-    event?.preventDefault()
+  async function handleAdd() {
     const title = newTitle.trim()
     if (!title) return
     try {
-      await createTask({ title, due_window: dueWindow, due_date: dueWindow === 'exact' ? dueDate || null : null })
+      await createTask({ title, due_date: dueDate || null })
       setNewTitle('')
-      setDueWindow('this_week')
       setDueDate('')
       setPrioritySuggestion(emptyPrioritySuggestion)
       if (filter !== 'active') {
@@ -157,12 +172,102 @@ export default function TasksPage() {
     }
   }
 
+  // Optimistic complete: move the task out of the active list / into completed
+  // instantly so header counts and the active view update without a refetch.
+  function handleComplete(id: string) {
+    const target = tasks.find((task) => task.id === id) ?? activeTasks.find((task) => task.id === id)
+    if (!target || target.lifecycle_status === 'completed') return
+    const completed: TaskItem = { ...target, lifecycle_status: 'completed' }
+
+    setTasks((current) =>
+      filter === 'active'
+        ? current.filter((task) => task.id !== id)
+        : current.map((task) => (task.id === id ? completed : task)),
+    )
+    setActiveTasks((current) => current.filter((task) => task.id !== id))
+    setCompletedTasks((current) => [completed, ...current.filter((task) => task.id !== id)])
+
+    void completeTask(id).catch((err) => {
+      toast({ message: err instanceof Error ? err.message : 'Unable to complete task', tone: 'danger' })
+      void load()
+    })
+  }
+
+  // Optimistic delete: drop the task from every list immediately, then surface
+  // an undo affordance. The exact removed object is restored on undo.
+  function handleDelete(task: TaskItem) {
+    const removed = task
+    const visibleIndex = tasks.findIndex((item) => item.id === removed.id)
+    const activeIndex = activeTasks.findIndex((item) => item.id === removed.id)
+    const completedIndex = completedTasks.findIndex((item) => item.id === removed.id)
+
+    setTasks((current) => current.filter((item) => item.id !== removed.id))
+    setActiveTasks((current) => current.filter((item) => item.id !== removed.id))
+    setCompletedTasks((current) => current.filter((item) => item.id !== removed.id))
+
+    undoToast({
+      message: 'Task deleted',
+      onUndo: () => {
+        const insert = (list: TaskItem[], index: number) => {
+          if (index < 0) return list
+          const next = [...list]
+          next.splice(Math.min(index, next.length), 0, removed)
+          return next
+        }
+        setTasks((current) => insert(current, visibleIndex))
+        setActiveTasks((current) => insert(current, activeIndex))
+        setCompletedTasks((current) => insert(current, completedIndex))
+      },
+      onCommit: () => {
+        void deleteTask(removed.id).catch((err) => {
+          toast({ message: err instanceof Error ? err.message : 'Unable to delete task', tone: 'danger' })
+          void load()
+        })
+        // The active set changed; drop any stale AI priority ordering.
+        setPrioritySuggestion(emptyPrioritySuggestion)
+      },
+    })
+  }
+
+  // Optimistic edit (title / due date): patch local state, persist in the
+  // background, reconcile via load() on failure.
+  function handleEdit(id: string, patch: TaskEditPatch) {
+    const apply = (task: TaskItem): TaskItem => ({
+      ...task,
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.due_date !== undefined ? { due_date: patch.due_date } : {}),
+    })
+    setTasks((current) => current.map((task) => (task.id === id ? apply(task) : task)))
+    setActiveTasks((current) => current.map((task) => (task.id === id ? apply(task) : task)))
+    setCompletedTasks((current) => current.map((task) => (task.id === id ? apply(task) : task)))
+
+    void updateTask(id, patch).catch((err) => {
+      toast({ message: err instanceof Error ? err.message : 'Unable to update task', tone: 'danger' })
+      void load()
+    })
+  }
+
   async function handleGeneratePrioritySuggestion() {
     setSuggesting(true)
     setError('')
     try {
       const suggestion = await generateTaskPrioritySuggestion()
-      setPrioritySuggestion(suggestion)
+      // Click reduction: if the pass produced an ordering, auto-enable the sort
+      // so the new order applies without a second click. The toggle still lets
+      // the user turn it back off.
+      if (suggestion.ranked.length > 0) {
+        if (suggestion.id) {
+          try {
+            setPrioritySuggestion(await updateTaskPrioritySuggestion(suggestion.id, { sort_enabled: true }))
+          } catch {
+            setPrioritySuggestion({ ...suggestion, sort_enabled: true })
+          }
+        } else {
+          setPrioritySuggestion({ ...suggestion, sort_enabled: true })
+        }
+      } else {
+        setPrioritySuggestion(suggestion)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to generate AI suggestions')
     } finally {
@@ -196,95 +301,104 @@ export default function TasksPage() {
     }
   }
 
+  const emptyCopy =
+    filter === 'active'
+      ? { title: 'Nothing on your plate.', body: 'Capture something above and it’ll land here.' }
+      : { title: 'No completed tasks yet.', body: 'Finished tasks will appear here once you check them off.' }
+
   return (
-    <div className="min-h-[calc(100vh-3rem)] bg-gray-50 text-gray-800 dark:bg-[#18181A] dark:text-gray-200">
+    <div className="min-h-[calc(100vh-3rem)] bg-bg text-fg">
       <div className={`${pageContentClass} py-7`}>
         <header className="mb-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900 dark:text-gray-100">Tasks</h1>
-            <p className="text-[12px] text-gray-500 dark:text-gray-500">
+            <h1 className="text-title font-semibold tracking-[-0.02em] text-fg">Tasks</h1>
+            <p className="text-caption text-fg-secondary">
               <span className="tabular-nums">{activeTasks.length}</span> active
-              <span className="px-1.5 text-gray-300 dark:text-gray-700">·</span>
+              <span className="px-1.5 text-fg-tertiary">·</span>
               <span className="tabular-nums">{dueTodayCount}</span> due today
-              <span className="px-1.5 text-gray-300 dark:text-gray-700">·</span>
+              <span className="px-1.5 text-fg-tertiary">·</span>
               <span className="tabular-nums">{completedTasks.length}</span> completed
             </p>
           </div>
-          <p className="text-[12px] text-gray-400 dark:text-gray-500">{todayLabel}</p>
+          <p className="text-caption text-fg-tertiary">{todayLabel}</p>
         </header>
 
         {error && (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200">
+          <div className="mb-3 rounded-control border border-danger/30 bg-danger/10 px-4 py-3 text-label text-danger">
             {error}
           </div>
         )}
 
-        <section
-          className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
-          style={{ borderWidth: '0.5px' }}
-        >
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <FilterTabs value={filter} onChange={setFilter} />
-            <div className="flex flex-wrap items-center gap-2">
-              <PrioritySortToggle
-                enabled={prioritySuggestion.sort_enabled}
-                disabled={prioritySuggestion.ranked.length === 0}
-                onChange={(next) => void handleTogglePrioritySort(next)}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <FilterTabs
+            options={['active', 'completed']}
+            value={filter}
+            onChange={(value) => setFilter(value as TaskFilter)}
+            ariaLabel="Task filter"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <PrioritySortToggle
+              enabled={prioritySuggestion.sort_enabled}
+              disabled={prioritySuggestion.ranked.length === 0}
+              onChange={(next) => void handleTogglePrioritySort(next)}
+            />
+            <button
+              type="button"
+              onClick={() => void handleGeneratePrioritySuggestion()}
+              disabled={suggesting || activeTasks.length === 0}
+              className="inline-flex items-center gap-2 rounded-control bg-accent px-3 py-1.5 text-label font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-accent-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Sparkles size={13} />
+              {suggesting ? 'Thinking…' : 'AI suggestions'}
+            </button>
+          </div>
+        </div>
+
+        <PrioritySuggestionsPanel
+          state={prioritySuggestion}
+          loading={suggesting}
+          onClose={() => void handleClosePriorityPanel()}
+        />
+
+        <CollectionView
+          divided
+          composer={
+            <div className="border-b border-hairline pb-2">
+              <Composer
+                value={newTitle}
+                onChange={setNewTitle}
+                onSubmit={handleAdd}
+                placeholder="Add a task…"
+                bare
+                submitIcon={<Plus size={16} />}
+                trailing={<DateChip value={dueDate} onChange={setDueDate} />}
               />
-              <button
-                type="button"
-                onClick={() => void handleGeneratePrioritySuggestion()}
-                disabled={suggesting || activeTasks.length === 0}
-                className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3 py-1.5 text-[12px] font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-gray-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
-              >
-                <Sparkles size={13} />
-                {suggesting ? 'Thinking…' : 'AI suggestions'}
-              </button>
             </div>
-          </div>
-
-          <PrioritySuggestionsPanel
-            state={prioritySuggestion}
-            loading={suggesting}
-            onClose={() => void handleClosePriorityPanel()}
-          />
-
-          <TaskComposer
-            title={newTitle}
-            dueWindow={dueWindow}
-            dueDate={dueDate}
-            onTitleChange={setNewTitle}
-            onDueWindowChange={setDueWindow}
-            onDueDateChange={setDueDate}
-            onSubmit={handleAdd}
-          />
-
-          <div className="mt-3 space-y-1">
-            {loading && tasks.length === 0 ? (
-              <div className="py-10 text-center text-[14px] text-gray-400">Loading tasks…</div>
-            ) : sortedTasks.length === 0 ? (
-              <EmptyTasksState filter={filter} />
-            ) : (
-              sortedTasks.map((task) => {
-                const canShowAiPriority = task.lifecycle_status === 'active'
-                const ranked = canShowAiPriority ? rankedMap.get(task.id) : undefined
-                const skippable = canShowAiPriority ? skippableMap.get(task.id) : undefined
-                return (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    todayISO={todayISO}
-                    priorityRank={ranked?.rank ?? null}
-                    priorityReason={ranked?.entry.reason ?? skippable?.reason ?? null}
-                    isBestNext={ranked?.rank === 1}
-                    isSkippable={Boolean(skippable)}
-                    onChanged={() => void load()}
-                  />
-                )
-              })
-            )}
-          </div>
-        </section>
+          }
+          loading={loading && tasks.length === 0}
+          isEmpty={sortedTasks.length === 0}
+          empty={<EmptyState icon={<ListTodo size={18} />} title={emptyCopy.title} body={emptyCopy.body} />}
+        >
+          {sortedTasks.map((task) => {
+            const canShowAiPriority = task.lifecycle_status === 'active'
+            const ranked = canShowAiPriority ? rankedMap.get(task.id) : undefined
+            const skippable = canShowAiPriority ? skippableMap.get(task.id) : undefined
+            return (
+              <TaskRow
+                key={task.id}
+                task={task}
+                todayISO={todayISO}
+                priorityRank={ranked?.rank ?? null}
+                priorityReason={ranked?.entry.reason ?? skippable?.reason ?? null}
+                isBestNext={ranked?.rank === 1}
+                isSkippable={Boolean(skippable)}
+                onComplete={handleComplete}
+                onDelete={handleDelete}
+                onEdit={handleEdit}
+              />
+            )
+          })}
+        </CollectionView>
       </div>
     </div>
   )
@@ -306,18 +420,12 @@ function PrioritySortToggle({
       onClick={() => onChange(!enabled)}
       className={
         enabled
-          ? 'inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-[12px] font-medium text-blue-700 transition-colors disabled:opacity-40 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-200'
-          : 'inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-500 transition-colors hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-400 dark:hover:text-gray-200'
+          ? 'inline-flex items-center gap-2 rounded-control border border-accent/40 bg-accent/10 px-3 py-1.5 text-label font-medium text-accent transition-colors disabled:opacity-40'
+          : 'inline-flex items-center gap-2 rounded-control border border-hairline bg-surface px-3 py-1.5 text-label font-medium text-fg-secondary transition-colors hover:text-fg disabled:cursor-not-allowed disabled:opacity-40'
       }
     >
       Sort by AI priority
-      <span
-        className={
-          enabled
-            ? 'h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_0_3px_rgba(59,130,246,0.18)]'
-            : 'h-2 w-2 rounded-full bg-gray-300 dark:bg-gray-600'
-        }
-      />
+      <span className={enabled ? 'h-2 w-2 rounded-full bg-accent' : 'h-2 w-2 rounded-full bg-fg-tertiary'} />
     </button>
   )
 }
@@ -331,18 +439,19 @@ function PrioritySuggestionsPanel({
   loading: boolean
   onClose: () => void
 }) {
-  const shouldShow = loading || (state.panel_visible && (state.ranked.length > 0 || state.skippable.length > 0 || state.suggestion_text))
+  const shouldShow =
+    loading || (state.panel_visible && (state.ranked.length > 0 || state.skippable.length > 0 || state.suggestion_text))
   if (!shouldShow) return null
 
   return (
-    <div className="mb-3 overflow-hidden rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-emerald-50 shadow-sm dark:border-blue-950/70 dark:from-blue-950/30 dark:via-[#1C1C1E] dark:to-emerald-950/20">
-      <div className="flex items-start justify-between gap-3 border-b border-blue-100/70 px-4 py-3 dark:border-blue-950/70">
+    <div className="ai-wash mb-4 overflow-hidden rounded-card">
+      <div className="flex items-start justify-between gap-3 px-4 pt-3">
         <div>
-          <div className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.18em] text-blue-600 dark:text-blue-300">
+          <div className="flex items-center gap-2 text-caption font-semibold uppercase tracking-[0.18em] text-accent">
             <Sparkles size={14} />
             Priority plan
           </div>
-          <p className="mt-1 text-[12px] leading-5 text-gray-500 dark:text-gray-400">
+          <p className="mt-1 text-caption leading-5 text-fg-secondary">
             Advisory focus order only. Your stored task priorities stay untouched.
           </p>
         </div>
@@ -350,7 +459,7 @@ function PrioritySuggestionsPanel({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full p-1 text-gray-400 transition-colors hover:bg-white/80 hover:text-gray-600 dark:hover:bg-gray-900/70 dark:hover:text-gray-200"
+            className="rounded-full p-1 text-fg-tertiary transition-colors hover:text-fg-secondary"
             aria-label="Hide priority suggestions"
           >
             <X size={15} />
@@ -361,41 +470,36 @@ function PrioritySuggestionsPanel({
       {loading ? (
         <div className="space-y-2 px-4 py-4">
           {[0, 1, 2].map((item) => (
-            <div key={item} className="h-14 animate-pulse rounded-xl bg-white/70 dark:bg-white/5" />
+            <Skeleton key={item} className="h-14" />
           ))}
         </div>
       ) : (
         <div className="grid gap-3 px-4 py-4 lg:grid-cols-[1fr_0.7fr]">
           <div className="space-y-2">
             {state.ranked.map((entry, index) => (
-              <div
-                key={entry.task_id}
-                className="rounded-xl border border-white/80 bg-white/75 p-3 shadow-sm dark:border-white/10 dark:bg-white/5"
-              >
+              <div key={entry.task_id} className="rounded-control bg-surface/60 p-3">
                 <div className="mb-1 flex items-center gap-2">
-                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-[11px] font-semibold text-white">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-accent text-caption font-semibold text-white">
                     P{index + 1}
                   </span>
-                  <h3 className="truncate text-[14px] font-semibold text-gray-800 dark:text-gray-100">{entry.title}</h3>
+                  <h3 className="truncate text-body font-semibold text-fg">{entry.title}</h3>
                 </div>
-                <p className="text-[12px] leading-5 text-gray-500 dark:text-gray-400">{entry.reason}</p>
+                <p className="text-caption leading-5 text-fg-secondary">{entry.reason}</p>
               </div>
             ))}
           </div>
 
-          <div className="rounded-xl border border-amber-100 bg-amber-50/80 p-3 dark:border-amber-900/50 dark:bg-amber-950/20">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">
-              Low alignment
-            </p>
+          <div className="rounded-control bg-warn/5 p-3">
+            <p className="text-caption font-semibold uppercase tracking-[0.16em] text-warn">Low alignment</p>
             {state.skippable.length > 0 ? (
               state.skippable.map((entry) => (
                 <div key={entry.task_id} className="mt-2">
-                  <h3 className="text-[13px] font-semibold text-gray-800 dark:text-gray-100">{entry.title}</h3>
-                  <p className="mt-1 text-[12px] leading-5 text-gray-500 dark:text-gray-400">{entry.reason}</p>
+                  <h3 className="text-label font-semibold text-fg">{entry.title}</h3>
+                  <p className="mt-1 text-caption leading-5 text-fg-secondary">{entry.reason}</p>
                 </div>
               ))
             ) : (
-              <p className="mt-2 text-[12px] leading-5 text-gray-500 dark:text-gray-400">
+              <p className="mt-2 text-caption leading-5 text-fg-secondary">
                 Nothing was clearly worth skipping in this pass.
               </p>
             )}
@@ -406,140 +510,49 @@ function PrioritySuggestionsPanel({
   )
 }
 
-function TaskComposer({
-  title,
-  dueWindow,
-  dueDate,
-  onTitleChange,
-  onDueWindowChange,
-  onDueDateChange,
-  onSubmit,
+function DateChip({
+  value,
+  onChange,
 }: {
-  title: string
-  dueWindow: DueWindow
-  dueDate: string
-  onTitleChange: (value: string) => void
-  onDueWindowChange: (value: DueWindow) => void
-  onDueDateChange: (value: string) => void
-  onSubmit: (event?: FormEvent) => void
+  value: string
+  onChange: (next: string) => void
 }) {
+  const ref = useRef<HTMLInputElement | null>(null)
+  const isToday = value === todayISODate()
   return (
-    <form
-      onSubmit={onSubmit}
-      className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
-      style={{ borderWidth: '0.5px' }}
-    >
-      <span className="text-gray-300 dark:text-gray-600">＋</span>
-      <input
-        value={title}
-        onChange={(event) => onTitleChange(event.target.value)}
-        placeholder="Add a task…"
-        className="min-w-0 flex-1 bg-transparent text-[14px] text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
-      />
-      <DueWindowPicker
-        dueWindow={dueWindow}
-        dueDate={dueDate}
-        onDueWindowChange={onDueWindowChange}
-        onDueDateChange={onDueDateChange}
-      />
-      <button
-        type="submit"
-        disabled={!title.trim()}
-        className="rounded-lg bg-blue-500 px-3 py-1.5 text-[13px] font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40"
-      >
-        Add
-      </button>
-    </form>
-  )
-}
-
-function DueWindowPicker({
-  dueWindow,
-  dueDate,
-  disabled = false,
-  onDueWindowChange,
-  onDueDateChange,
-}: {
-  dueWindow: DueWindow
-  dueDate: string
-  disabled?: boolean
-  onDueWindowChange: (value: DueWindow) => void
-  onDueDateChange: (value: string) => void
-}) {
-  const dateInputRef = useRef<HTMLInputElement | null>(null)
-  const [open, setOpen] = useState(false)
-
-  function chooseWindow(next: DueWindow) {
-    onDueWindowChange(next)
-    if (next !== 'exact') onDueDateChange('')
-    setOpen(false)
-    if (next === 'exact') {
-      window.setTimeout(() => dateInputRef.current?.showPicker?.(), 0)
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="relative">
+    <div className="relative inline-flex items-center">
+      {value ? (
+        <>
+          <button
+            type="button"
+            onClick={() => ref.current?.showPicker?.()}
+            className={`inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-label transition-colors ${
+              isToday ? 'text-accent' : 'text-fg-secondary hover:text-fg'
+            }`}
+          >
+            <CalendarDays size={15} />
+            {formatDueLabel(value)}
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            aria-label="Clear date"
+            className="ml-0.5 rounded-md p-0.5 text-fg-tertiary transition-colors hover:text-danger"
+          >
+            <X size={13} />
+          </button>
+        </>
+      ) : (
         <button
           type="button"
-          disabled={disabled}
-          onClick={() => setOpen((value) => !value)}
-          className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-[12px] font-medium text-gray-500 transition-colors hover:border-gray-300 hover:text-gray-700 disabled:cursor-default disabled:opacity-50 dark:border-gray-700 dark:bg-[#202024] dark:text-gray-400 dark:hover:text-gray-200"
-          style={{ borderWidth: '0.5px' }}
+          onClick={() => ref.current?.showPicker?.()}
+          aria-label="Add date"
+          className="rounded-md p-1 text-fg-tertiary transition-colors hover:text-accent"
         >
-          <CalendarDays size={13} />
-          {dueWindowButtonLabel(dueWindow, dueDate, todayISODate())}
-          <ChevronDown size={12} />
+          <CalendarDays size={15} />
         </button>
-        {open && !disabled && (
-          <div
-            className="absolute right-0 top-full z-10 mt-1 w-40 rounded-xl border border-gray-200 bg-white p-1 shadow-lg dark:border-gray-800 dark:bg-[#1C1C1E]"
-            style={{ borderWidth: '0.5px' }}
-          >
-            {([
-              ['this_week', 'This week'],
-              ['this_month', 'This month'],
-              ['someday', 'Someday'],
-              ['exact', 'Pick a date...'],
-            ] as Array<[DueWindow, string]>).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => chooseWindow(value)}
-                className="block w-full rounded-lg px-3 py-2 text-left text-[12px] text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {dueWindow === 'exact' && !disabled && (
-        <input
-          ref={dateInputRef}
-          type="date"
-          value={dueDate}
-          onChange={(event) => onDueDateChange(event.target.value)}
-          className="w-32 bg-transparent text-[12px] text-gray-400 outline-none"
-        />
       )}
-    </div>
-  )
-}
-
-function EmptyTasksState({ filter }: { filter: TaskFilter }) {
-  const copy =
-    filter === 'active'
-      ? { title: 'Nothing on your plate.', body: 'Capture something above and it’ll land here.' }
-      : { title: 'No completed tasks yet.', body: 'Finished tasks will appear here once you check them off.' }
-  return (
-    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-6 py-10 text-center dark:border-gray-700 dark:bg-[#18181A]">
-      <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-gray-400 dark:bg-gray-800 dark:text-gray-500">
-        <ListTodo size={18} />
-      </div>
-      <h3 className="text-[14px] font-medium text-gray-700 dark:text-gray-300">{copy.title}</h3>
-      <p className="mx-auto mt-1 max-w-xs text-[12px] leading-5 text-gray-500 dark:text-gray-500">{copy.body}</p>
+      <input ref={ref} type="date" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
     </div>
   )
 }
@@ -551,7 +564,9 @@ function TaskRow({
   priorityReason,
   isBestNext,
   isSkippable,
-  onChanged,
+  onComplete,
+  onDelete,
+  onEdit,
 }: {
   task: TaskItem
   todayISO: string
@@ -559,59 +574,22 @@ function TaskRow({
   priorityReason: string | null
   isBestNext: boolean
   isSkippable: boolean
-  onChanged: () => void
+  onComplete: (id: string) => void
+  onDelete: (task: TaskItem) => void
+  onEdit: (id: string, patch: TaskEditPatch) => void
 }) {
-  const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const [title, setTitle] = useState(task.title)
-  const [dueWindow, setDueWindow] = useState<DueWindow>(task.due_window)
-  const [dueDate, setDueDate] = useState(task.due_date ?? '')
-
-  useEffect(() => {
-    setTitle(task.title)
-    setDueWindow(task.due_window)
-    setDueDate(task.due_date ?? '')
-  }, [task.title, task.due_window, task.due_date])
-
-  async function saveTitle() {
-    const next = title.trim()
-    if (next && next !== task.title) {
-      await updateTask(task.id, { title: next })
-      onChanged()
-    }
-    setEditing(false)
-  }
-
-  async function saveDue(nextWindow: DueWindow, nextDate: string) {
-    setDueWindow(nextWindow)
-    setDueDate(nextDate)
-    await updateTask(task.id, {
-      due_window: nextWindow,
-      due_date: nextWindow === 'exact' ? nextDate || null : null,
-    })
-    onChanged()
-  }
-
-  const wasRewritten = task.rewrite_status === 'complete' && Boolean(task.original_title) && task.original_title !== task.title
+  const wasRewritten =
+    task.rewrite_status === 'complete' && Boolean(task.original_title) && task.original_title !== task.title
 
   return (
-    <article
-      className={
-        isBestNext
-          ? 'group rounded-xl border border-blue-300 bg-blue-50/70 shadow-[0_0_0_1px_rgba(59,130,246,0.12),0_16px_34px_-28px_rgba(37,99,235,0.9)] transition-colors hover:border-blue-400 dark:border-blue-900/80 dark:bg-blue-950/20'
-          : 'group rounded-xl border border-gray-200 bg-white transition-colors hover:border-gray-300 dark:border-gray-800 dark:bg-[#1C1C1E] dark:hover:border-gray-700'
-      }
-      style={{ borderWidth: isBestNext ? '1px' : '0.5px' }}
-    >
-      <div className="flex items-center gap-3 px-4 py-3">
+    <CollectionRow variant="plain" accent={isBestNext}>
+      <div className="flex items-center gap-3 px-1 py-3">
         <button
           type="button"
           disabled={task.lifecycle_status === 'completed'}
-          onClick={async () => {
-            await completeTask(task.id)
-            onChanged()
-          }}
-          className="shrink-0 text-gray-300 transition-colors hover:text-[#1D9E75] disabled:opacity-40"
+          onClick={() => onComplete(task.id)}
+          className="shrink-0 text-fg-tertiary transition-colors hover:text-success disabled:opacity-40"
           aria-label={`Complete ${task.title}`}
         >
           <CheckCircle2 size={20} strokeWidth={1.6} />
@@ -622,73 +600,42 @@ function TaskRow({
               type="button"
               onClick={() => setExpanded((value) => !value)}
               aria-label={expanded ? `Collapse ${task.title}` : `Expand ${task.title}`}
-              className="shrink-0 rounded-md p-0.5 text-gray-300 transition-colors hover:text-gray-500 dark:hover:text-gray-200"
+              className="shrink-0 rounded-md p-0.5 text-fg-tertiary transition-colors hover:text-fg-secondary"
             >
               <ChevronDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
             </button>
-            {editing ? (
-              <input
-                autoFocus
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                onBlur={() => void saveTitle()}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') void saveTitle()
-                  if (event.key === 'Escape') {
-                    setTitle(task.title)
-                    setEditing(false)
-                  }
-                }}
-                className="w-full bg-transparent text-[15px] font-medium text-gray-700 outline-none dark:text-gray-300"
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setEditing(true)}
-                className="block max-w-full truncate text-left text-[15px] font-medium leading-snug text-gray-700 dark:text-gray-300"
-              >
-                {task.title}
-              </button>
-            )}
+            <EditableTitle
+              value={task.title}
+              onSave={(next) => onEdit(task.id, { title: next })}
+              className="block max-w-full truncate text-body font-medium leading-snug text-fg"
+            />
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-gray-400">
-            {isBestNext && (
-              <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white">
-                Best next
-              </span>
-            )}
-            {priorityRank && (
-              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-950 dark:text-blue-200">
-                P{priorityRank}
-              </span>
-            )}
-            {isSkippable && (
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950 dark:text-amber-200">
-                Low alignment
-              </span>
-            )}
-            {wasRewritten && (
-              <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-200">
-                rewritten
-              </span>
-            )}
-            <AsyncStatusPills connection={task.connection_status} chunk={task.chunk_status} bucketUpdate={task.bucket_update_status} />
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-caption text-fg-tertiary">
+            {isBestNext && <Pill tone="accent">Best next</Pill>}
+            {priorityRank && <Pill tone="accent">P{priorityRank}</Pill>}
+            {isSkippable && <Pill tone="warn">Low alignment</Pill>}
+            {wasRewritten && <Pill tone="neutral">rewritten</Pill>}
+            <AsyncStatusPills
+              connection={task.connection_status}
+              chunk={task.chunk_status}
+              bucketUpdate={task.bucket_update_status}
+            />
           </div>
           {expanded && task.description && (
-            <p className="mt-2 whitespace-pre-wrap rounded-lg bg-gray-50 px-3 py-2 text-[13px] leading-6 text-gray-600 dark:bg-white/5 dark:text-gray-300">
+            <p className="mt-2 whitespace-pre-wrap rounded-control bg-surface-inset px-3 py-2 text-label leading-6 text-fg-secondary">
               {task.description}
             </p>
           )}
           {expanded && wasRewritten && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-gray-500 dark:text-gray-400">
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-caption text-fg-secondary">
               <span>Original: {task.original_title}</span>
               <button
                 type="button"
                 onClick={async () => {
                   await revertTaskRewrite(task.id)
-                  onChanged()
+                  onEdit(task.id, { title: task.original_title ?? task.title })
                 }}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/30"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-accent transition-colors hover:bg-accent/10"
               >
                 <RotateCcw size={12} />
                 Revert
@@ -696,102 +643,31 @@ function TaskRow({
             </div>
           )}
           {priorityReason && (
-            <p className="mt-2 rounded-lg bg-white/65 px-3 py-2 text-[12px] leading-5 text-gray-500 dark:bg-white/5 dark:text-gray-400">
+            <p className="mt-2 rounded-control bg-surface-inset px-3 py-2 text-caption leading-5 text-fg-secondary">
               {priorityReason}
             </p>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2 self-start pt-0.5">
+        <RowActions className="self-start pt-0.5">
           {task.lifecycle_status === 'active' ? (
-            <DueWindowPicker
-              dueWindow={dueWindow}
-              dueDate={dueDate}
-              onDueWindowChange={(nextWindow) => {
-                if (nextWindow === 'exact') {
-                  setDueWindow(nextWindow)
-                  return
-                }
-                void saveDue(nextWindow, '')
-              }}
-              onDueDateChange={(nextDate) => {
-                void saveDue('exact', nextDate)
-              }}
-            />
+            <DateChip value={task.due_date ?? ''} onChange={(next) => onEdit(task.id, { due_date: next || null })} />
           ) : (
             <span
-              className={`text-[12px] text-gray-400 ${
-                task.due_window === 'exact' && task.due_date === todayISO
-                  ? 'font-medium text-blue-500 dark:text-blue-400'
-                  : ''
-              }`}
+              className={`text-caption text-fg-tertiary ${task.due_date === todayISO ? 'font-medium text-accent' : ''}`}
             >
-              {dueWindowButtonLabel(task.due_window, task.due_date, todayISO)}
+              {task.due_date ? (task.due_date === todayISO ? 'today' : task.due_date) : 'Someday'}
             </span>
           )}
           <button
             type="button"
-            onClick={async () => {
-              await deleteTask(task.id)
-              onChanged()
-            }}
-            className="text-gray-300 opacity-0 transition-[color,opacity] hover:text-red-400 group-hover:opacity-100 focus-visible:opacity-100"
+            onClick={() => onDelete(task)}
+            className="text-fg-tertiary transition-colors hover:text-danger"
             aria-label={`Delete ${task.title}`}
           >
             <Trash2 size={14} />
           </button>
-        </div>
+        </RowActions>
       </div>
-    </article>
+    </CollectionRow>
   )
-}
-
-function FilterTabs({ value, onChange }: { value: TaskFilter; onChange: (value: TaskFilter) => void }) {
-  return (
-    <div className="flex items-center rounded-lg bg-gray-100 p-0.5 dark:bg-gray-800">
-      {(['active', 'completed'] as const).map((item) => (
-        <button
-          key={item}
-          type="button"
-          onClick={() => onChange(item)}
-          className={
-            value === item
-              ? 'rounded-md bg-white px-3 py-1 text-[12px] font-medium capitalize text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
-              : 'rounded-md px-3 py-1 text-[12px] capitalize text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300'
-          }
-        >
-          {item}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function dueWindowLabel(window: DueWindow, dueDate: string | null, todayISO: string) {
-  if (window === 'this_week') return 'This week'
-  if (window === 'this_month') return 'This month'
-  if (window === 'someday') return null
-  if (!dueDate) return 'Pick a date'
-  return dueDate === todayISO ? 'today' : dueDate
-}
-
-function dueWindowButtonLabel(window: DueWindow, dueDate: string | null, todayISO: string) {
-  return dueWindowLabel(window, dueDate, todayISO) ?? 'Someday'
-}
-
-function effectiveDueSort(task: TaskItem) {
-  const now = new Date()
-  if (task.due_window === 'someday') return null
-  if (task.due_window === 'exact') return task.due_date
-  if (task.due_window === 'this_week') {
-    const end = new Date(now)
-    const day = end.getDay() === 0 ? 6 : end.getDay() - 1
-    end.setDate(end.getDate() + (6 - day))
-    return isoDate(end)
-  }
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-  return isoDate(end)
-}
-
-function isoDate(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }

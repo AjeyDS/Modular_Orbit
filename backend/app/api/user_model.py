@@ -2,24 +2,29 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
 from app.user_model import (
     StoryBucketItem,
     StoryBucketUpdate,
+    capture_fact,
     create_goal,
+    current_woven_doc,
     delete_goal,
     get_story_bucket_item,
     list_goals,
+    list_recent_facts,
     list_story_bucket_items,
     promote_goal,
+    schedule_weave_if_needed,
     update_goal,
     update_story_bucket_item,
+    weave_user_model,
 )
 
 
@@ -57,7 +62,55 @@ class GoalUpdate(BaseModel):
     target_note: str | None = None
 
 
+class WovenDocResponse(BaseModel):
+    version: int
+    content: str
+    fact_count_at_weave: int
+    woven_at: datetime
+
+
+class FactResponse(BaseModel):
+    id: UUID
+    source: str
+    text: str
+    salience: str
+    woven: bool
+    created_at: datetime
+
+
+class NoteCreate(BaseModel):
+    text: str = Field(min_length=1)
+
+
 router = APIRouter(prefix="/user-model", tags=["user-model"])
+
+
+@router.get("/doc", response_model=WovenDocResponse)
+def get_woven_doc_endpoint() -> Response | WovenDocResponse:
+    doc = current_woven_doc()
+    if doc is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return WovenDocResponse(**doc)
+
+
+@router.post("/reweave", response_model=WovenDocResponse)
+def reweave_endpoint() -> Response | WovenDocResponse:
+    doc = weave_user_model()
+    if doc is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return WovenDocResponse(**doc)
+
+
+@router.get("/facts", response_model=list[FactResponse])
+def list_facts_endpoint(limit: int = Query(20, ge=1, le=100)) -> list[FactResponse]:
+    return [FactResponse(**fact) for fact in list_recent_facts(limit)]
+
+
+@router.post("/notes", response_model=FactResponse, status_code=status.HTTP_201_CREATED)
+def create_note_endpoint(payload: NoteCreate, background_tasks: BackgroundTasks) -> FactResponse:
+    fact = capture_fact(source="manual", text=payload.text, salience="high")
+    schedule_weave_if_needed(background_tasks)
+    return FactResponse(**fact)
 
 
 @router.get("/buckets", response_model=list[StoryBucketItem])

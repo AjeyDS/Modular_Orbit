@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
 from uuid import UUID
 
@@ -15,6 +15,7 @@ from app.modules.companion import (
     send_companion_message,
     skip_companion_question,
 )
+from app.user_model import schedule_weave_if_needed
 from app.modules.curious import (
     CuriousAnswerCreate,
     CuriousCompletion,
@@ -97,8 +98,13 @@ def get_companion_state_endpoint() -> CompanionState:
 
 
 @router.post("/companion/message", response_model=CompanionMessageResponse)
-def send_companion_message_endpoint(payload: CompanionMessageRequest) -> CompanionMessageResponse:
-    return send_companion_message(payload.message)
+def send_companion_message_endpoint(
+    payload: CompanionMessageRequest, background_tasks: BackgroundTasks
+) -> CompanionMessageResponse:
+    response = send_companion_message(payload.message)
+    # After the turn is recorded, weave in the background if the tail crossed threshold.
+    schedule_weave_if_needed(background_tasks)
+    return response
 
 
 @router.post("/companion/ask", response_model=CompanionMessageResponse)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,8 @@ from psycopg.types.json import Jsonb
 
 from app.db import transaction
 
+logger = logging.getLogger(__name__)
+
 
 class LifeItemError(ValueError):
     """Raised when a Life Item operation violates the module contract."""
@@ -21,6 +24,39 @@ class LifeItemError(ValueError):
 class LifeItemResult:
     item: dict[str, Any]
     created: bool
+
+
+# Curious-module scaffolding (sessions, seeded questions, harvested answers) are
+# internal plumbing, not durable user life items. They must not leak into the
+# user fact stream as "Added curious_question: ..." noise that the weave folds in.
+_NON_DURABLE_ITEM_TYPES = frozenset({"curious_session", "curious_question", "curious_answer"})
+
+
+def _capture_life_item_fact(item: dict[str, Any], verb: str) -> None:
+    """Best-effort: append a life-item event to the user fact stream.
+
+    Runs after the life-item write has committed; a failure here must never
+    fail the user-facing operation, so all exceptions are swallowed.
+    """
+    title = (item.get("title") or "").strip()
+    if not title:
+        return
+    source = item.get("source")
+    if isinstance(source, Mapping) and source.get("kind") == "companion_capture":
+        return
+    kind = item.get("item_type") or "item"
+    if kind in _NON_DURABLE_ITEM_TYPES:
+        return
+    try:
+        # Local import avoids a module-load cycle (user_model imports app.db, not lifecycle).
+        from app.user_model import capture_fact
+        capture_fact(
+            source="life_item",
+            text=f"{verb} {kind}: {title}",
+            ref={"life_item_id": str(item["id"]), "kind": kind},
+        )
+    except Exception:
+        logger.warning("Failed to capture life-item fact for %s", item.get("id"), exc_info=True)
 
 
 def get_or_create_default_module_instance(conn: Connection, module_id: str) -> UUID:
@@ -140,7 +176,10 @@ def create_life_item(
         if created and module["storage_strategy"] == "extended":
             _insert_side_table_row(conn, module, item["id"], side_table_data or {})
 
-        return LifeItemResult(item=item, created=created)
+    if created:
+        _capture_life_item_fact(item, "Added")
+
+    return LifeItemResult(item=item, created=created)
 
 
 def update_life_item(
@@ -193,7 +232,11 @@ def update_life_item(
             row = cur.fetchone()
             if row is None:
                 raise LifeItemError(f"Unknown Life Item: {life_item_id}")
-            return dict(row)
+            updated = dict(row)
+
+    if meaningful_edit:
+        _capture_life_item_fact(updated, "Updated")
+    return updated
 
 
 def set_lifecycle_status(life_item_id: UUID | str, lifecycle_status: str) -> dict[str, Any]:
@@ -223,9 +266,16 @@ def delete_life_item(life_item_id: UUID | str) -> None:
     """Hard-delete a Life Item and rely on database cascades for derived rows."""
     with transaction() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM life_items WHERE id = %s RETURNING id", (life_item_id,))
-            if cur.fetchone() is None:
+            cur.execute(
+                "DELETE FROM life_items WHERE id = %s RETURNING id, title, item_type",
+                (life_item_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
                 raise LifeItemError(f"Unknown Life Item: {life_item_id}")
+            removed = dict(row)
+
+    _capture_life_item_fact(removed, "Removed")
 
 
 def get_life_item(life_item_id: UUID | str) -> dict[str, Any]:
@@ -298,12 +348,11 @@ def _insert_side_table_row(
         if module["side_table"] == "task_items":
             cur.execute(
                 """
-                INSERT INTO task_items (life_item_id, due_window, due_date, priority, module_status)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO task_items (life_item_id, due_date, priority, module_status)
+                VALUES (%s, %s, %s, %s)
                 """,
                 (
                     life_item_id,
-                    side_table_data.get("due_window", "this_week"),
                     side_table_data.get("due_date"),
                     side_table_data.get("priority"),
                     side_table_data.get("module_status"),

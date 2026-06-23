@@ -119,8 +119,7 @@ def ensure_schema() -> None:
             cur.execute(
                 """
                 ALTER TABLE task_items
-                ADD COLUMN IF NOT EXISTS due_window TEXT NOT NULL DEFAULT 'this_week'
-                    CHECK (due_window IN ('this_week', 'this_month', 'someday', 'exact'))
+                DROP COLUMN IF EXISTS due_window
                 """
             )
 
@@ -356,6 +355,42 @@ def ensure_schema() -> None:
                     completed_at TIMESTAMPTZ
                 )
                 """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_facts (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    source TEXT NOT NULL
+                        CHECK (source IN ('companion', 'life_item', 'manual', 'import')),
+                    text TEXT NOT NULL,
+                    ref JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    salience TEXT NOT NULL DEFAULT 'normal'
+                        CHECK (salience IN ('normal', 'high')),
+                    woven BOOLEAN NOT NULL DEFAULT FALSE,
+                    woven_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_model_weave (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    version INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    fact_count_at_weave INTEGER NOT NULL DEFAULT 0,
+                    woven_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_facts_unwoven "
+                "ON user_facts(created_at) WHERE woven = FALSE"
+            )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_model_weave_version "
+                "ON user_model_weave(version)"
             )
 
             cur.execute(

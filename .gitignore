@@ -6,3 +6,11 @@ __pycache__/
 node_modules/
 dist/
 
+
+# Personal user-model content — never commit (repo-root dir only,
+# NOT the backend/app/user_model source package)
+/user_model/
+
+# Local dev/preview artifacts
+.npm-cache/
+.claude/launch.json

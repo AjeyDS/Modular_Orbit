@@ -72,7 +72,6 @@ export interface TaskItem {
   connection_status: AsyncStepStatus
   chunk_status: AsyncStepStatus
   bucket_update_status: AsyncStepStatus
-  due_window: 'this_week' | 'this_month' | 'someday' | 'exact'
   due_date: string | null
   priority: number | null
   module_status: string | null
@@ -107,7 +106,6 @@ export interface TaskPrioritySuggestionState {
 export interface CreateTaskRequest {
   title: string
   description?: string
-  due_window?: 'this_week' | 'this_month' | 'someday' | 'exact'
   due_date?: string | null
   priority?: number | null
   module_status?: string | null
@@ -427,6 +425,22 @@ export interface StoryBucketItem {
   content: string
   last_user_edit_at: string | null
   updated_at: string
+}
+
+export interface WovenDoc {
+  version: number
+  content: string
+  fact_count_at_weave: number
+  woven_at: string
+}
+
+export interface UserFact {
+  id: string
+  source: string
+  text: string
+  salience: string
+  woven: boolean
+  created_at: string
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -938,6 +952,28 @@ export function sendCompanionEndBeacon(): boolean {
     return true
   }
   return false
+}
+
+export async function fetchWovenDoc(): Promise<WovenDoc | null> {
+  const doc = await apiFetch<WovenDoc | undefined>('/user-model/doc')
+  return doc ?? null
+}
+
+export async function reweaveUserModel(): Promise<WovenDoc | null> {
+  const doc = await apiFetch<WovenDoc | undefined>('/user-model/reweave', { method: 'POST' })
+  return doc ?? null
+}
+
+export function fetchUserFacts(limit?: number): Promise<UserFact[]> {
+  const query = limit ? `?limit=${limit}` : ''
+  return apiFetch<UserFact[]>(`/user-model/facts${query}`)
+}
+
+export function addUserNote(text: string): Promise<UserFact> {
+  return apiFetch<UserFact>('/user-model/notes', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
 }
 
 export function fetchStoryBuckets(): Promise<StoryBucketItem[]> {

@@ -128,7 +128,6 @@ def create_document(
         if review:
             process_lifecycle_for_item(result.item["id"], root=review_root)
             _set_document_bucket_update_text(result.item["id"], connection_summary)
-            _auto_weave_connected_buckets(result.item["id"])
         bucket_keys = _route_document_buckets(payload.content, summary)
         if bucket_keys:
             _write_document_bucket_updates(
@@ -361,13 +360,10 @@ def _row_to_document(row: dict[str, Any]) -> DocumentItem:
 
 
 def _annotate_document(content: str, *, summary: str) -> tuple[str, str, str]:
-    from app.user_model import list_goals, list_story_bucket_items
+    from app.user_model import build_user_model_context, list_goals
 
     context = {
-        "story_buckets": [
-            {"name": bucket.display_name, "description": bucket.description, "content": bucket.content[:500]}
-            for bucket in list_story_bucket_items()
-        ],
+        "user_model": build_user_model_context(budget=1500),
         "active_goals": [{"title": goal.title, "body": goal.body[:300]} for goal in list_goals() if goal.status == "active"],
     }
     try:
@@ -375,7 +371,7 @@ def _annotate_document(content: str, *, summary: str) -> tuple[str, str, str]:
             _annotation_prompt(content[:4000], context),
             system=(
                 "You categorize a personal document and explain in one sentence how it connects "
-                "to the person, using their story buckets and goals. Return only JSON: "
+                "to the person, using their user model and goals. Return only JSON: "
                 '{"category_tag": str, "connection_summary": str}.'
             ),
             temperature=0.2,
@@ -458,7 +454,7 @@ def _write_document_bucket_updates(
     if not bucket_keys or not text.strip():
         return
 
-    woven_bucket_ids: list[UUID] = []
+    updated_bucket_ids: list[UUID] = []
     with transaction() as conn:
         with conn.cursor() as cur:
             for bucket_key in bucket_keys:
@@ -487,8 +483,8 @@ def _write_document_bucket_updates(
                         Jsonb({"source": "documents", "bucket_key": bucket_key}),
                     ),
                 )
-                woven_bucket_ids.append(bucket["id"])
-            if woven_bucket_ids:
+                updated_bucket_ids.append(bucket["id"])
+            if updated_bucket_ids:
                 cur.execute(
                     """
                     UPDATE life_items
@@ -498,36 +494,6 @@ def _write_document_bucket_updates(
                     """,
                     (life_item_id,),
                 )
-
-    from app.lifecycle.story_weave import StoryWeaveError, weave_story_bucket
-
-    for bucket_id in woven_bucket_ids:
-        try:
-            weave_story_bucket(bucket_id)
-        except StoryWeaveError:
-            continue
-
-
-def _auto_weave_connected_buckets(life_item_id: UUID) -> None:
-    from app.lifecycle.story_weave import StoryWeaveError, weave_story_bucket
-
-    with transaction() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT target_id::uuid AS bucket_id
-                FROM item_connections
-                WHERE source_life_item_id = %s AND target_type = 'story_bucket'
-                """,
-                (life_item_id,),
-            )
-            bucket_ids = [row["bucket_id"] for row in cur.fetchall()]
-
-    for bucket_id in bucket_ids:
-        try:
-            weave_story_bucket(bucket_id)
-        except StoryWeaveError:
-            continue
 
 
 def _set_document_bucket_update_text(life_item_id: UUID, connection_summary: str) -> None:

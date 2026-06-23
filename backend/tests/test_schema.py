@@ -139,7 +139,7 @@ def test_document_items_has_annotation_columns() -> None:
     assert cols == {"category_tag", "connection_summary", "tag_status"}
 
 
-def test_task_items_has_due_window() -> None:
+def test_task_items_has_no_due_window() -> None:
     ensure_schema()
     with connect() as conn:
         with conn.cursor() as cur:
@@ -149,7 +149,7 @@ def test_task_items_has_due_window() -> None:
                 WHERE table_name = 'task_items' AND column_name = 'due_window'
                 """
             )
-            assert cur.fetchone() is not None
+            assert cur.fetchone() is None
 
 
 def test_life_item_request_id_is_unique() -> None:
