@@ -9,3 +9,12 @@ export { Skeleton, SkeletonRows } from './Skeleton'
 export { Composer } from './Composer'
 export { ToastProvider, useToast } from './Toast'
 export { CollectionView, CollectionRow, EditableTitle, RowActions } from './CollectionView'
+export {
+  MessageBubble,
+  ChatThread,
+  ChatComposer,
+  Chip,
+  QuickReplyChips,
+  TypingIndicator,
+} from './ChatThread'
+export type { MessageRole, QuickReply } from './ChatThread'
