@@ -7,6 +7,8 @@ export type { PillTone } from './Pill'
 export { EmptyState } from './EmptyState'
 export { Skeleton, SkeletonRows } from './Skeleton'
 export { Composer } from './Composer'
+export { Dialog } from './Dialog'
+export type { DialogProps } from './Dialog'
 export { ToastProvider, useToast } from './Toast'
 export { CollectionView, CollectionRow, EditableTitle, RowActions } from './CollectionView'
 export {
