@@ -12,6 +12,7 @@ interface CollectionViewProps {
   isEmpty?: boolean
   empty?: ReactNode
   skeleton?: ReactNode
+  divided?: boolean
   children?: ReactNode
   className?: string
 }
@@ -22,6 +23,7 @@ export function CollectionView({
   isEmpty = false,
   empty,
   skeleton,
+  divided = false,
   children,
   className,
 }: CollectionViewProps) {
@@ -33,7 +35,7 @@ export function CollectionView({
       ) : isEmpty ? (
         empty
       ) : (
-        <div className="mt-3 space-y-1">
+        <div className={divided ? 'mt-2 divide-y divide-hairline' : 'mt-3 space-y-1'}>
           <AnimatePresence initial={false}>{children}</AnimatePresence>
         </div>
       )}
@@ -48,11 +50,27 @@ export function CollectionView({
 // spreadable without TS friction.
 type CollectionRowProps = ComponentPropsWithoutRef<typeof motion.article> & {
   accent?: boolean
+  variant?: 'card' | 'plain'
   className?: string
   children: ReactNode
 }
 
-export function CollectionRow({ accent = false, className, children, ...rest }: CollectionRowProps) {
+export function CollectionRow({
+  accent = false,
+  variant = 'card',
+  className,
+  children,
+  ...rest
+}: CollectionRowProps) {
+  const tone =
+    variant === 'plain'
+      ? accent
+        ? 'rounded-control ai-wash'
+        : 'rounded-control transition-colors hover:bg-surface-inset'
+      : cn(
+          'rounded-control border bg-surface transition-colors',
+          accent ? 'border-accent/40 ai-wash' : 'border-hairline hover:border-hairline-strong',
+        )
   return (
     <motion.article
       layout
@@ -60,11 +78,7 @@ export function CollectionRow({ accent = false, className, children, ...rest }: 
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -6 }}
       transition={{ duration: 0.18, ease: ROW_EASE }}
-      className={cn(
-        'group rounded-control border bg-surface transition-colors',
-        accent ? 'border-accent/40 ai-wash' : 'border-hairline hover:border-hairline-strong',
-        className,
-      )}
+      className={cn('group', tone, className)}
       {...rest}
     >
       {children}

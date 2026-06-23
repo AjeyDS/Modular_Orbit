@@ -17,7 +17,6 @@ import {
 } from '../lib/api'
 import { AsyncStatusPills } from '../components/status'
 import {
-  Card,
   CollectionRow,
   CollectionView,
   Composer,
@@ -52,6 +51,11 @@ const emptyPrioritySuggestion: TaskPrioritySuggestionState = {
 function todayISODate() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+function formatDueLabel(value: string) {
+  if (value === todayISODate()) return 'Today'
+  return new Date(`${value}T00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 export default function TasksPage() {
@@ -325,75 +329,76 @@ export default function TasksPage() {
           </div>
         )}
 
-        <Card className="p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <FilterTabs
-              options={['active', 'completed']}
-              value={filter}
-              onChange={(value) => setFilter(value as TaskFilter)}
-              ariaLabel="Task filter"
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <PrioritySortToggle
-                enabled={prioritySuggestion.sort_enabled}
-                disabled={prioritySuggestion.ranked.length === 0}
-                onChange={(next) => void handleTogglePrioritySort(next)}
-              />
-              <button
-                type="button"
-                onClick={() => void handleGeneratePrioritySuggestion()}
-                disabled={suggesting || activeTasks.length === 0}
-                className="inline-flex items-center gap-2 rounded-control bg-accent px-3 py-1.5 text-label font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-accent-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Sparkles size={13} />
-                {suggesting ? 'Thinking…' : 'AI suggestions'}
-              </button>
-            </div>
-          </div>
-
-          <PrioritySuggestionsPanel
-            state={prioritySuggestion}
-            loading={suggesting}
-            onClose={() => void handleClosePriorityPanel()}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <FilterTabs
+            options={['active', 'completed']}
+            value={filter}
+            onChange={(value) => setFilter(value as TaskFilter)}
+            ariaLabel="Task filter"
           />
+          <div className="flex flex-wrap items-center gap-2">
+            <PrioritySortToggle
+              enabled={prioritySuggestion.sort_enabled}
+              disabled={prioritySuggestion.ranked.length === 0}
+              onChange={(next) => void handleTogglePrioritySort(next)}
+            />
+            <button
+              type="button"
+              onClick={() => void handleGeneratePrioritySuggestion()}
+              disabled={suggesting || activeTasks.length === 0}
+              className="inline-flex items-center gap-2 rounded-control bg-accent px-3 py-1.5 text-label font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-accent-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Sparkles size={13} />
+              {suggesting ? 'Thinking…' : 'AI suggestions'}
+            </button>
+          </div>
+        </div>
 
-          <CollectionView
-            composer={
+        <PrioritySuggestionsPanel
+          state={prioritySuggestion}
+          loading={suggesting}
+          onClose={() => void handleClosePriorityPanel()}
+        />
+
+        <CollectionView
+          divided
+          composer={
+            <div className="border-b border-hairline pb-2">
               <Composer
                 value={newTitle}
                 onChange={setNewTitle}
                 onSubmit={handleAdd}
                 placeholder="Add a task…"
-                leading={<Plus size={15} className="text-fg-tertiary" />}
+                bare
+                submitIcon={<Plus size={16} />}
                 trailing={<DateChip value={dueDate} onChange={setDueDate} />}
-                submitLabel="Add"
               />
-            }
-            loading={loading && tasks.length === 0}
-            isEmpty={sortedTasks.length === 0}
-            empty={<EmptyState icon={<ListTodo size={18} />} title={emptyCopy.title} body={emptyCopy.body} />}
-          >
-            {sortedTasks.map((task) => {
-              const canShowAiPriority = task.lifecycle_status === 'active'
-              const ranked = canShowAiPriority ? rankedMap.get(task.id) : undefined
-              const skippable = canShowAiPriority ? skippableMap.get(task.id) : undefined
-              return (
-                <TaskRow
-                  key={task.id}
-                  task={task}
-                  todayISO={todayISO}
-                  priorityRank={ranked?.rank ?? null}
-                  priorityReason={ranked?.entry.reason ?? skippable?.reason ?? null}
-                  isBestNext={ranked?.rank === 1}
-                  isSkippable={Boolean(skippable)}
-                  onComplete={handleComplete}
-                  onDelete={handleDelete}
-                  onEdit={handleEdit}
-                />
-              )
-            })}
-          </CollectionView>
-        </Card>
+            </div>
+          }
+          loading={loading && tasks.length === 0}
+          isEmpty={sortedTasks.length === 0}
+          empty={<EmptyState icon={<ListTodo size={18} />} title={emptyCopy.title} body={emptyCopy.body} />}
+        >
+          {sortedTasks.map((task) => {
+            const canShowAiPriority = task.lifecycle_status === 'active'
+            const ranked = canShowAiPriority ? rankedMap.get(task.id) : undefined
+            const skippable = canShowAiPriority ? skippableMap.get(task.id) : undefined
+            return (
+              <TaskRow
+                key={task.id}
+                task={task}
+                todayISO={todayISO}
+                priorityRank={ranked?.rank ?? null}
+                priorityReason={ranked?.entry.reason ?? skippable?.reason ?? null}
+                isBestNext={ranked?.rank === 1}
+                isSkippable={Boolean(skippable)}
+                onComplete={handleComplete}
+                onDelete={handleDelete}
+                onEdit={handleEdit}
+              />
+            )
+          })}
+        </CollectionView>
       </div>
     </div>
   )
@@ -439,8 +444,8 @@ function PrioritySuggestionsPanel({
   if (!shouldShow) return null
 
   return (
-    <div className="ai-wash mb-3 overflow-hidden rounded-card border border-accent/30">
-      <div className="flex items-start justify-between gap-3 border-b border-accent/20 px-4 py-3">
+    <div className="ai-wash mb-4 overflow-hidden rounded-card">
+      <div className="flex items-start justify-between gap-3 px-4 pt-3">
         <div>
           <div className="flex items-center gap-2 text-caption font-semibold uppercase tracking-[0.18em] text-accent">
             <Sparkles size={14} />
@@ -472,7 +477,7 @@ function PrioritySuggestionsPanel({
         <div className="grid gap-3 px-4 py-4 lg:grid-cols-[1fr_0.7fr]">
           <div className="space-y-2">
             {state.ranked.map((entry, index) => (
-              <div key={entry.task_id} className="rounded-control border border-hairline bg-surface/75 p-3">
+              <div key={entry.task_id} className="rounded-control bg-surface/60 p-3">
                 <div className="mb-1 flex items-center gap-2">
                   <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-accent text-caption font-semibold text-white">
                     P{index + 1}
@@ -484,7 +489,7 @@ function PrioritySuggestionsPanel({
             ))}
           </div>
 
-          <div className="rounded-control border border-warn/30 bg-warn/10 p-3">
+          <div className="rounded-control bg-warn/5 p-3">
             <p className="text-caption font-semibold uppercase tracking-[0.16em] text-warn">Low alignment</p>
             {state.skippable.length > 0 ? (
               state.skippable.map((entry) => (
@@ -513,24 +518,38 @@ function DateChip({
   onChange: (next: string) => void
 }) {
   const ref = useRef<HTMLInputElement | null>(null)
+  const isToday = value === todayISODate()
   return (
     <div className="relative inline-flex items-center">
-      <button
-        type="button"
-        onClick={() => ref.current?.showPicker?.()}
-        className="inline-flex items-center gap-1 rounded-control border border-hairline bg-surface-inset px-2.5 py-1.5 text-label font-medium text-fg-secondary transition-colors hover:text-fg"
-      >
-        <CalendarDays size={13} />
-        {value ? (value === todayISODate() ? 'Today' : value) : 'Add date'}
-      </button>
-      {value && (
+      {value ? (
+        <>
+          <button
+            type="button"
+            onClick={() => ref.current?.showPicker?.()}
+            className={`inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-label transition-colors ${
+              isToday ? 'text-accent' : 'text-fg-secondary hover:text-fg'
+            }`}
+          >
+            <CalendarDays size={15} />
+            {formatDueLabel(value)}
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            aria-label="Clear date"
+            className="ml-0.5 rounded-md p-0.5 text-fg-tertiary transition-colors hover:text-danger"
+          >
+            <X size={13} />
+          </button>
+        </>
+      ) : (
         <button
           type="button"
-          onClick={() => onChange('')}
-          aria-label="Clear date"
-          className="ml-1 rounded-md p-0.5 text-fg-tertiary hover:text-danger"
+          onClick={() => ref.current?.showPicker?.()}
+          aria-label="Add date"
+          className="rounded-md p-1 text-fg-tertiary transition-colors hover:text-accent"
         >
-          <X size={12} />
+          <CalendarDays size={15} />
         </button>
       )}
       <input ref={ref} type="date" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
@@ -564,8 +583,8 @@ function TaskRow({
     task.rewrite_status === 'complete' && Boolean(task.original_title) && task.original_title !== task.title
 
   return (
-    <CollectionRow accent={isBestNext}>
-      <div className="flex items-center gap-3 px-4 py-3">
+    <CollectionRow variant="plain" accent={isBestNext}>
+      <div className="flex items-center gap-3 px-1 py-3">
         <button
           type="button"
           disabled={task.lifecycle_status === 'completed'}

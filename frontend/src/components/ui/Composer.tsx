@@ -8,6 +8,8 @@ interface ComposerProps {
   leading?: ReactNode
   trailing?: ReactNode
   submitLabel?: string
+  submitIcon?: ReactNode
+  bare?: boolean
   multiline?: boolean
   submitDisabled?: boolean
 }
@@ -22,6 +24,8 @@ export function Composer({
   leading,
   trailing,
   submitLabel = 'Add',
+  submitIcon,
+  bare = false,
   multiline = false,
   submitDisabled = false,
 }: ComposerProps) {
@@ -66,8 +70,22 @@ export function Composer({
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex flex-wrap items-center gap-2 rounded-card border border-hairline bg-surface-inset px-3 py-2 transition-colors focus-within:border-hairline-strong"
+      className={
+        bare
+          ? 'flex items-center gap-2 py-1.5'
+          : 'flex flex-wrap items-center gap-2 rounded-card border border-hairline bg-surface-inset px-3 py-2 transition-colors focus-within:border-hairline-strong'
+      }
     >
+      {submitIcon && (
+        <button
+          type="submit"
+          aria-label="Add"
+          disabled={disabled}
+          className="shrink-0 rounded-md p-1 text-fg-tertiary transition-colors hover:text-accent disabled:opacity-40"
+        >
+          {submitIcon}
+        </button>
+      )}
       {leading}
       {multiline ? (
         <textarea
@@ -90,13 +108,15 @@ export function Composer({
         />
       )}
       {trailing}
-      <button
-        type="submit"
-        disabled={disabled}
-        className="rounded-control bg-accent px-3 py-1.5 text-label font-medium text-white transition-[background-color,transform] duration-150 hover:bg-accent-hover active:scale-[0.97] disabled:opacity-40"
-      >
-        {submitLabel}
-      </button>
+      {!submitIcon && (
+        <button
+          type="submit"
+          disabled={disabled}
+          className="rounded-control bg-accent px-3 py-1.5 text-label font-medium text-white transition-[background-color,transform] duration-150 hover:bg-accent-hover active:scale-[0.97] disabled:opacity-40"
+        >
+          {submitLabel}
+        </button>
+      )}
     </form>
   )
 }
