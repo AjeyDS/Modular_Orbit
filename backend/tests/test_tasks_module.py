@@ -85,33 +85,32 @@ def test_create_task_writes_life_item_side_table_and_review(tmp_path) -> None:
     remove_task(task.id)
 
 
-def test_create_task_defaults_due_window_this_week(tmp_path) -> None:
+def test_create_task_defaults_due_date_none(tmp_path) -> None:
     task = create_task(
-        TaskCreate(title="ship it", request_id=_request_id("task-due-window-default")),
+        TaskCreate(title="ship it", request_id=_request_id("task-due-default")),
         review=False,
         review_root=tmp_path,
     )
 
-    assert task.due_window == "this_week"
+    assert task.due_date is None
+    assert not hasattr(task, "due_window")
 
     remove_task(task.id)
 
 
-def test_create_task_exact_window_with_date(tmp_path) -> None:
+def test_create_task_with_due_date(tmp_path) -> None:
     from datetime import date
 
     task = create_task(
         TaskCreate(
             title="dentist",
-            due_window="exact",
             due_date=date(2026, 7, 1),
-            request_id=_request_id("task-due-window-exact"),
+            request_id=_request_id("task-due-date"),
         ),
         review=False,
         review_root=tmp_path,
     )
 
-    assert task.due_window == "exact"
     assert task.due_date == date(2026, 7, 1)
 
     remove_task(task.id)
