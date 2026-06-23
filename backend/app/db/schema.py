@@ -119,8 +119,7 @@ def ensure_schema() -> None:
             cur.execute(
                 """
                 ALTER TABLE task_items
-                ADD COLUMN IF NOT EXISTS due_window TEXT NOT NULL DEFAULT 'this_week'
-                    CHECK (due_window IN ('this_week', 'this_month', 'someday', 'exact'))
+                DROP COLUMN IF EXISTS due_window
                 """
             )
 
