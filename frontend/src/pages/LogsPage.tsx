@@ -210,6 +210,7 @@ export default function LogsPage() {
             placeholder="Capture a log…"
             bare
             multiline
+            submitShortcut="mod-enter"
             submitIcon={<Plus size={16} />}
           />
         </div>

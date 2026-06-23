@@ -12,6 +12,7 @@ interface ComposerProps {
   bare?: boolean
   multiline?: boolean
   submitDisabled?: boolean
+  submitShortcut?: 'enter' | 'mod-enter'
 }
 
 const MAX_TEXTAREA_HEIGHT = 140
@@ -28,6 +29,7 @@ export function Composer({
   bare = false,
   multiline = false,
   submitDisabled = false,
+  submitShortcut = 'enter',
 }: ComposerProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -61,6 +63,15 @@ export function Composer({
   }
 
   function handleTextareaKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (submitShortcut === 'mod-enter') {
+      // Plain Enter (and Shift+Enter) inserts a newline; Cmd/Ctrl+Enter submits.
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault()
+        submit()
+      }
+      return
+    }
+    // Default: Enter submits, Shift+Enter inserts a newline.
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       submit()
