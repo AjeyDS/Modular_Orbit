@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
-import { Archive, CheckCircle2, Circle, Flame, ListChecks } from 'lucide-react'
+import { Archive, CheckCircle2, Circle, Flame, Plus } from 'lucide-react'
 import {
   archiveRoutineItem,
   completeRoutineItem,
@@ -12,6 +11,15 @@ import {
   type RoutineState,
 } from '../lib/api'
 import { AsyncStatusPills } from '../components/status'
+import {
+  CollectionRow,
+  CollectionView,
+  Composer,
+  EditableTitle,
+  EmptyState,
+  RowActions,
+  useToast,
+} from '../components/ui'
 import { pageContentClass } from '../layout/pageShell'
 
 function todayISODate() {
@@ -33,8 +41,8 @@ export default function RoutinePage() {
   const [state, setState] = useState<RoutineState | null>(null)
   const [newTitle, setNewTitle] = useState('')
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const { toast, undoToast } = useToast()
 
   async function load() {
     setLoading(true)
@@ -52,238 +60,228 @@ export default function RoutinePage() {
     void load()
   }, [])
 
-  async function handleAdd(event?: FormEvent) {
-    event?.preventDefault()
-    const title = newTitle.trim()
-    if (!title || saving) return
-    setSaving(true)
-    setError('')
-    try {
-      await createRoutineItem({
-        title,
-        position: state?.items.length ?? 0,
-      })
-      setNewTitle('')
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to create routine item')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   const items = state?.items ?? []
   const completed = state?.completed_count ?? 0
   const total = state?.total_count ?? 0
 
+  async function handleAdd() {
+    const title = newTitle.trim()
+    if (!title) return
+    setError('')
+    try {
+      const created = await createRoutineItem({ title, position: items.length })
+      setNewTitle('')
+      // Append the server-derived item so streak / status fields are correct.
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              items: [...current.items, created],
+              total_count: current.total_count + 1,
+              completed_count: current.completed_count + (created.today_completed ? 1 : 0),
+            }
+          : current,
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to create routine item')
+    }
+  }
+
+  // Optimistic toggle: flip today_completed + nudge the streak and the done
+  // count immediately, then reconcile to the server's item on success (the API
+  // returns the authoritative streak). Reload on error.
+  function handleToggle(item: RoutineItem) {
+    const willComplete = !item.today_completed
+    const optimistic: RoutineItem = {
+      ...item,
+      today_completed: willComplete,
+      streak_count: Math.max(0, item.streak_count + (willComplete ? 1 : -1)),
+    }
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.map((it) => (it.id === item.id ? optimistic : it)),
+            completed_count: current.completed_count + (willComplete ? 1 : -1),
+          }
+        : current,
+    )
+
+    const request = willComplete
+      ? completeRoutineItem(item.id, todayISO)
+      : uncompleteRoutineItem(item.id, todayISO)
+    void request
+      .then((server) => {
+        // Reconcile against the authoritative streak the server returned.
+        setState((current) =>
+          current
+            ? { ...current, items: current.items.map((it) => (it.id === server.id ? server : it)) }
+            : current,
+        )
+      })
+      .catch((err) => {
+        toast({ message: err instanceof Error ? err.message : 'Unable to update routine item', tone: 'danger' })
+        void load()
+      })
+  }
+
+  // Optimistic rename: patch local state then persist in the background.
+  function handleRename(id: string, title: string) {
+    setState((current) =>
+      current
+        ? { ...current, items: current.items.map((it) => (it.id === id ? { ...it, title } : it)) }
+        : current,
+    )
+    void updateRoutineItem(id, { title }).catch((err) => {
+      toast({ message: err instanceof Error ? err.message : 'Unable to rename routine item', tone: 'danger' })
+      void load()
+    })
+  }
+
+  // Optimistic archive + undo: remove immediately, restore on undo, persist on commit.
+  function handleArchive(item: RoutineItem) {
+    const index = items.findIndex((it) => it.id === item.id)
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.filter((it) => it.id !== item.id),
+            total_count: Math.max(0, current.total_count - 1),
+            completed_count: Math.max(0, current.completed_count - (item.today_completed ? 1 : 0)),
+          }
+        : current,
+    )
+
+    undoToast({
+      message: 'Routine archived',
+      onUndo: () => {
+        setState((current) => {
+          if (!current) return current
+          const next = [...current.items]
+          next.splice(Math.min(index < 0 ? next.length : index, next.length), 0, item)
+          return {
+            ...current,
+            items: next,
+            total_count: current.total_count + 1,
+            completed_count: current.completed_count + (item.today_completed ? 1 : 0),
+          }
+        })
+      },
+      onCommit: () => {
+        void archiveRoutineItem(item.id).catch((err) => {
+          toast({ message: err instanceof Error ? err.message : 'Unable to archive routine item', tone: 'danger' })
+          void load()
+        })
+      },
+    })
+  }
+
   return (
-    <div className="min-h-[calc(100vh-3rem)] bg-gray-50 text-gray-800 dark:bg-[#18181A] dark:text-gray-200">
+    <div className="min-h-[calc(100vh-3rem)] bg-bg text-fg">
       <div className={`${pageContentClass} py-7`}>
         <header className="mb-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900 dark:text-gray-100">Routine</h1>
-            <p className="text-[12px] text-gray-500 dark:text-gray-500">
+            <h1 className="text-title font-semibold tracking-[-0.02em] text-fg">Routine</h1>
+            <p className="text-caption text-fg-secondary">
               <span className="tabular-nums">{completed}</span>/<span className="tabular-nums">{total}</span> done
             </p>
           </div>
-          <p className="text-[12px] text-gray-400 dark:text-gray-500">{todayLabel}</p>
+          <p className="text-caption text-fg-tertiary">{todayLabel}</p>
         </header>
 
         {error && (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200">
+          <div className="mb-3 rounded-control border border-danger/30 bg-danger/10 px-4 py-3 text-label text-danger">
             {error}
           </div>
         )}
 
-        <section
-          className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
-          style={{ borderWidth: '0.5px' }}
+        <CollectionView
+          divided
+          composer={
+            <div className="border-b border-hairline pb-2">
+              <Composer
+                value={newTitle}
+                onChange={setNewTitle}
+                onSubmit={handleAdd}
+                placeholder="Add routine item…"
+                bare
+                submitIcon={<Plus size={16} />}
+              />
+            </div>
+          }
+          loading={loading && items.length === 0}
+          isEmpty={items.length === 0}
+          empty={
+            <EmptyState
+              icon={<Flame size={18} />}
+              title="No routine items yet."
+              body="Add the first thing you want to check off each day."
+            />
+          }
         >
-          <RoutineComposer
-            title={newTitle}
-            saving={saving}
-            onTitleChange={setNewTitle}
-            onSubmit={handleAdd}
-          />
-
-          <div className="mt-3 space-y-1">
-            {loading && items.length === 0 ? (
-              <div className="py-10 text-center text-[14px] text-gray-400">Loading routine…</div>
-            ) : items.length === 0 ? (
-              <EmptyRoutineState />
-            ) : (
-              items.map((item) => (
-                <RoutineRow
-                  key={item.id}
-                  item={item}
-                  date={todayISO}
-                  onChanged={() => void load()}
-                  onError={setError}
-                />
-              ))
-            )}
-          </div>
-        </section>
+          {items.map((item) => (
+            <RoutineRow
+              key={item.id}
+              item={item}
+              onToggle={handleToggle}
+              onRename={handleRename}
+              onArchive={handleArchive}
+            />
+          ))}
+        </CollectionView>
       </div>
     </div>
   )
 }
 
-function RoutineComposer({
-  title,
-  saving,
-  onTitleChange,
-  onSubmit,
-}: {
-  title: string
-  saving: boolean
-  onTitleChange: (value: string) => void
-  onSubmit: (event?: FormEvent) => void
-}) {
-  return (
-    <form
-      onSubmit={onSubmit}
-      className="flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
-      style={{ borderWidth: '0.5px' }}
-    >
-      <span className="text-gray-300 dark:text-gray-600">＋</span>
-      <input
-        value={title}
-        onChange={(event) => onTitleChange(event.target.value)}
-        placeholder="Add routine item…"
-        className="min-w-0 flex-1 bg-transparent text-[14px] text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
-      />
-      <button
-        type="submit"
-        disabled={saving || !title.trim()}
-        className="rounded-lg bg-blue-500 px-3 py-1.5 text-[13px] font-medium text-white transition-[background-color,transform] duration-150 ease-out hover:bg-blue-600 active:scale-[0.97] disabled:opacity-40"
-      >
-        {saving ? 'Adding…' : 'Add'}
-      </button>
-    </form>
-  )
-}
-
 function RoutineRow({
   item,
-  date,
-  onChanged,
-  onError,
+  onToggle,
+  onRename,
+  onArchive,
 }: {
   item: RoutineItem
-  date: string
-  onChanged: () => void
-  onError: (message: string) => void
+  onToggle: (item: RoutineItem) => void
+  onRename: (id: string, title: string) => void
+  onArchive: (item: RoutineItem) => void
 }) {
-  const [editing, setEditing] = useState(false)
-  const [title, setTitle] = useState(item.title)
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    setTitle(item.title)
-  }, [item.title])
-
-  async function toggleComplete() {
-    if (busy) return
-    setBusy(true)
-    onError('')
-    try {
-      if (item.today_completed) {
-        await uncompleteRoutineItem(item.id, date)
-      } else {
-        await completeRoutineItem(item.id, date)
-      }
-      onChanged()
-    } catch (err) {
-      onError(err instanceof Error ? err.message : 'Unable to update routine item')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function saveTitle() {
-    const next = title.trim()
-    if (next && next !== item.title) {
-      try {
-        await updateRoutineItem(item.id, { title: next })
-        onChanged()
-      } catch (err) {
-        onError(err instanceof Error ? err.message : 'Unable to rename routine item')
-      }
-    }
-    setEditing(false)
-  }
-
-  async function archiveItem() {
-    if (busy) return
-    setBusy(true)
-    onError('')
-    try {
-      await archiveRoutineItem(item.id)
-      onChanged()
-    } catch (err) {
-      onError(err instanceof Error ? err.message : 'Unable to archive routine item')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   return (
-    <article
-      className={
-        item.today_completed
-          ? 'group rounded-xl border border-emerald-200 bg-emerald-50/70 transition-colors hover:border-emerald-300 dark:border-emerald-950/70 dark:bg-emerald-950/20'
-          : 'group rounded-xl border border-gray-200 bg-white transition-colors hover:border-gray-300 dark:border-gray-800 dark:bg-[#1C1C1E] dark:hover:border-gray-700'
-      }
-      style={{ borderWidth: '0.5px' }}
-    >
-      <div className="flex items-center gap-3 px-4 py-3">
+    <CollectionRow variant="plain">
+      <div className="flex items-center gap-3 px-1 py-3">
         <button
           type="button"
-          disabled={busy}
-          onClick={() => void toggleComplete()}
+          onClick={() => onToggle(item)}
           className={
             item.today_completed
-              ? 'shrink-0 text-[#1D9E75] transition-colors disabled:opacity-50'
-              : 'shrink-0 text-gray-300 transition-colors hover:text-[#1D9E75] disabled:opacity-50'
+              ? 'shrink-0 text-success transition-colors'
+              : 'shrink-0 text-fg-tertiary transition-colors hover:text-success'
           }
           aria-label={item.today_completed ? `Uncheck ${item.title}` : `Check ${item.title}`}
         >
-          {item.today_completed ? <CheckCircle2 size={20} strokeWidth={1.7} /> : <Circle size={20} strokeWidth={1.7} />}
+          {item.today_completed ? (
+            <CheckCircle2 size={20} strokeWidth={1.7} />
+          ) : (
+            <Circle size={20} strokeWidth={1.7} />
+          )}
         </button>
 
         <div className="min-w-0 flex-1">
-          {editing ? (
-            <input
-              autoFocus
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              onBlur={() => void saveTitle()}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void saveTitle()
-                if (event.key === 'Escape') {
-                  setTitle(item.title)
-                  setEditing(false)
-                }
-              }}
-              className="w-full bg-transparent text-[15px] font-medium text-gray-700 outline-none dark:text-gray-300"
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className={`block max-w-full truncate text-left text-[15px] font-medium leading-snug ${
-                item.today_completed
-                  ? 'text-gray-500 line-through decoration-emerald-400/70 dark:text-gray-400'
-                  : 'text-gray-700 dark:text-gray-300'
-              }`}
-            >
-              {item.title}
-            </button>
-          )}
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-gray-400">
+          <EditableTitle
+            value={item.title}
+            onSave={(next) => onRename(item.id, next)}
+            className={
+              item.today_completed
+                ? 'block max-w-full truncate text-body font-medium leading-snug text-fg-secondary line-through'
+                : 'block max-w-full truncate text-body font-medium leading-snug text-fg'
+            }
+          />
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-caption text-fg-tertiary">
             {item.description && <span className="truncate">{item.description}</span>}
-            <AsyncStatusPills connection={item.connection_status} chunk={item.chunk_status} bucketUpdate={item.bucket_update_status} />
+            <AsyncStatusPills
+              connection={item.connection_status}
+              chunk={item.chunk_status}
+              bucketUpdate={item.bucket_update_status}
+            />
           </div>
         </div>
 
@@ -291,39 +289,26 @@ function RoutineRow({
           <div
             className={
               item.streak_count > 0
-                ? 'inline-flex min-w-12 items-center justify-end gap-1 text-orange-500 dark:text-orange-300'
-                : 'inline-flex min-w-12 items-center justify-end gap-1 text-gray-300 dark:text-gray-600'
+                ? 'inline-flex min-w-12 items-center justify-end gap-1 text-warn'
+                : 'inline-flex min-w-12 items-center justify-end gap-1 text-fg-tertiary'
             }
             aria-label={`${item.streak_count} day streak`}
           >
             <Flame size={16} fill="currentColor" strokeWidth={1.7} />
-            <span className="text-[13px] font-semibold tabular-nums">{item.streak_count}</span>
+            <span className="text-label font-semibold tabular-nums">{item.streak_count}</span>
           </div>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void archiveItem()}
-            className="rounded-md p-1.5 text-gray-300 opacity-0 transition-[color,opacity] hover:bg-gray-100 hover:text-gray-600 group-hover:opacity-100 focus-visible:opacity-100 disabled:opacity-30 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-            aria-label={`Archive ${item.title}`}
-          >
-            <Archive size={14} />
-          </button>
+          <RowActions>
+            <button
+              type="button"
+              onClick={() => onArchive(item)}
+              className="rounded-md p-1.5 text-fg-tertiary transition-colors hover:text-fg-secondary"
+              aria-label={`Archive ${item.title}`}
+            >
+              <Archive size={14} />
+            </button>
+          </RowActions>
         </div>
       </div>
-    </article>
-  )
-}
-
-function EmptyRoutineState() {
-  return (
-    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-6 py-10 text-center dark:border-gray-700 dark:bg-[#18181A]">
-      <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-gray-400 dark:bg-gray-800 dark:text-gray-500">
-        <ListChecks size={18} />
-      </div>
-      <h3 className="text-[14px] font-medium text-gray-700 dark:text-gray-300">No routine items yet.</h3>
-      <p className="mx-auto mt-1 max-w-xs text-[12px] leading-5 text-gray-500 dark:text-gray-500">
-        Add the first thing you want to check off each day.
-      </p>
-    </div>
+    </CollectionRow>
   )
 }
