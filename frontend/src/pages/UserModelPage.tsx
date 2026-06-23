@@ -1,27 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, Save, ShieldCheck } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
 import {
   addUserNote,
-  fetchStoryBuckets,
   fetchUserFacts,
   fetchWovenDoc,
   reweaveUserModel,
-  updateStoryBucket,
-  type StoryBucketItem,
   type UserFact,
   type WovenDoc,
 } from '../lib/api'
 import { Markdown } from '../components/Markdown'
 import { pageContentClass } from '../layout/pageShell'
-import { Card, MasterDetail, NavItem, Pill, useToast } from '../components/ui'
+import { Card, Pill } from '../components/ui'
 
 function formatTimestamp(value: string): string {
   return new Date(value).toLocaleString()
 }
 
 export default function UserModelPage() {
-  const { toast } = useToast()
-
   const [doc, setDoc] = useState<WovenDoc | null>(null)
   const [facts, setFacts] = useState<UserFact[]>([])
   const [noteDraft, setNoteDraft] = useState('')
@@ -29,34 +24,6 @@ export default function UserModelPage() {
   const [reweaving, setReweaving] = useState(false)
   const [addingNote, setAddingNote] = useState(false)
   const [wovenStatus, setWovenStatus] = useState('')
-
-  const [buckets, setBuckets] = useState<StoryBucketItem[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [draftName, setDraftName] = useState('')
-  const [draftDescription, setDraftDescription] = useState('')
-  const [draftContent, setDraftContent] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [status, setStatus] = useState('')
-
-  const selectedBucket = useMemo(
-    () => buckets.find((bucket) => bucket.id === selectedId) ?? buckets[0] ?? null,
-    [buckets, selectedId],
-  )
-
-  async function loadBuckets() {
-    setLoading(true)
-    setStatus('')
-    try {
-      const nextBuckets = await fetchStoryBuckets()
-      setBuckets(nextBuckets)
-      setSelectedId((current) => current ?? nextBuckets[0]?.id ?? null)
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Unable to load Story Buckets')
-    } finally {
-      setLoading(false)
-    }
-  }
 
   async function loadWovenModel() {
     setDocLoading(true)
@@ -144,57 +111,7 @@ export default function UserModelPage() {
 
   useEffect(() => {
     void loadWovenModel()
-    void loadBuckets()
   }, [])
-
-  useEffect(() => {
-    if (!selectedBucket) return
-    setDraftName(selectedBucket.display_name)
-    setDraftDescription(selectedBucket.description)
-    setDraftContent(selectedBucket.content)
-  }, [selectedBucket])
-
-  const isDirty =
-    selectedBucket !== null &&
-    (draftName !== selectedBucket.display_name ||
-      draftDescription !== selectedBucket.description ||
-      draftContent !== selectedBucket.content)
-
-  function selectBucket(nextId: string) {
-    if (nextId === selectedBucket?.id) return
-    if (isDirty) {
-      // Don't silently discard unsaved editor edits — keep the user where they are.
-      toast({ message: 'You have unsaved edits — save or discard them first.', tone: 'warn' })
-      return
-    }
-    setSelectedId(nextId)
-  }
-
-  function discardDraft() {
-    if (!selectedBucket) return
-    setDraftName(selectedBucket.display_name)
-    setDraftDescription(selectedBucket.description)
-    setDraftContent(selectedBucket.content)
-  }
-
-  async function saveBucket() {
-    if (!selectedBucket || saving) return
-    setSaving(true)
-    setStatus('Saving Story Bucket...')
-    try {
-      const updated = await updateStoryBucket(selectedBucket.id, {
-        display_name: draftName.trim() || selectedBucket.display_name,
-        description: draftDescription,
-        content: draftContent,
-      })
-      setBuckets((current) => current.map((bucket) => (bucket.id === updated.id ? updated : bucket)))
-      setStatus('Saved. This bucket is now locked from automatic rewrites.')
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Unable to save Story Bucket')
-    } finally {
-      setSaving(false)
-    }
-  }
 
   const noteBusy = addingNote || reweaving
   const noteEmpty = !noteDraft.trim()
@@ -205,7 +122,7 @@ export default function UserModelPage() {
         <header className="mb-5">
           <h1 className="text-title font-semibold tracking-[-0.02em] text-fg">User Model</h1>
           <p className="mt-1 text-label text-fg-secondary">
-            What Orbit understands about you. Edits lock a bucket from automatic rewriting.
+            What Orbit understands about you, woven from your captured facts and notes.
           </p>
         </header>
 
@@ -319,121 +236,6 @@ export default function UserModelPage() {
               </ul>
             )}
           </Card>
-
-          <Card className="p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h2 className="text-heading font-semibold text-fg">Story Buckets (legacy)</h2>
-                <p className="mt-1 text-label leading-6 text-fg-secondary">
-                  Story Buckets are Orbit's editable understanding of you. Edits update the markdown directly and lock the section from automatic rewrites.
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {isDirty && (
-                  <button
-                    type="button"
-                    disabled={!selectedBucket}
-                    onClick={discardDraft}
-                    className="inline-flex items-center justify-center rounded-control px-4 py-2 text-label font-medium text-fg-secondary transition-colors hover:text-fg disabled:opacity-40"
-                  >
-                    Discard
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={!isDirty || saving || !selectedBucket}
-                  onClick={() => void saveBucket()}
-                  className="inline-flex items-center justify-center gap-2 rounded-control bg-accent px-4 py-2 text-label font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
-                >
-                  <Save size={14} />
-                  {saving ? 'Saving...' : 'Save bucket'}
-                </button>
-              </div>
-            </div>
-            {status && (
-              <p className="mt-3 rounded-control border border-hairline bg-surface-inset px-3 py-2 text-caption text-fg-secondary">
-                {status}
-              </p>
-            )}
-          </Card>
-
-          {loading ? (
-            <Card className="p-5">
-              <p className="py-6 text-center text-label text-fg-tertiary">Loading Story Buckets...</p>
-            </Card>
-          ) : (
-            <MasterDetail
-              navWidthClass="lg:grid-cols-[16rem_minmax(0,1fr)]"
-              nav={buckets.map((bucket) => (
-                <NavItem
-                  key={bucket.id}
-                  active={selectedBucket?.id === bucket.id}
-                  label={bucket.display_name}
-                  sublabel={bucket.stable_key}
-                  trailing={
-                    bucket.last_user_edit_at ? <ShieldCheck size={14} className="text-accent" /> : undefined
-                  }
-                  onClick={() => selectBucket(bucket.id)}
-                />
-              ))}
-              detail={
-                selectedBucket && (
-                  <Card className="overflow-hidden">
-                    <div className="border-b border-hairline p-4">
-                      <div className="grid gap-3 md:grid-cols-[minmax(0,0.75fr)_minmax(0,1.25fr)]">
-                        <label className="grid gap-1.5">
-                          <span className="text-caption font-medium uppercase tracking-wider text-fg-tertiary">
-                            Bucket name
-                          </span>
-                          <input
-                            value={draftName}
-                            onChange={(event) => setDraftName(event.target.value)}
-                            className="rounded-control border border-hairline bg-surface-inset px-3 py-2 text-label text-fg outline-none transition-colors focus:border-accent"
-                          />
-                        </label>
-                        <label className="grid gap-1.5">
-                          <span className="text-caption font-medium uppercase tracking-wider text-fg-tertiary">
-                            Description
-                          </span>
-                          <input
-                            value={draftDescription}
-                            onChange={(event) => setDraftDescription(event.target.value)}
-                            className="rounded-control border border-hairline bg-surface-inset px-3 py-2 text-label text-fg outline-none transition-colors focus:border-accent"
-                          />
-                        </label>
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-2 text-caption text-fg-tertiary">
-                        <span>{selectedBucket.is_splittable ? 'Splittable bucket' : 'Stable bucket'}</span>
-                        <span aria-hidden>·</span>
-                        <span className="truncate">{selectedBucket.file_path}</span>
-                        {selectedBucket.last_user_edit_at && (
-                          <>
-                            <span aria-hidden>·</span>
-                            <span>Edited {formatTimestamp(selectedBucket.last_user_edit_at)}</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="p-4">
-                      <label className="grid gap-2">
-                        <span className="text-caption font-medium uppercase tracking-wider text-fg-tertiary">
-                          Markdown story
-                        </span>
-                        <textarea
-                          value={draftContent}
-                          onChange={(event) => setDraftContent(event.target.value)}
-                          rows={22}
-                          spellCheck={false}
-                          className="min-h-[28rem] resize-y rounded-control border border-hairline bg-surface-inset px-3 py-2 font-mono text-label leading-6 text-fg outline-none transition-colors focus:border-accent"
-                        />
-                      </label>
-                    </div>
-                  </Card>
-                )
-              }
-            />
-          )}
         </div>
       </div>
     </div>
