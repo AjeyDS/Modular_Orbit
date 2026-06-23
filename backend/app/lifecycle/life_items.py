@@ -348,12 +348,11 @@ def _insert_side_table_row(
         if module["side_table"] == "task_items":
             cur.execute(
                 """
-                INSERT INTO task_items (life_item_id, due_window, due_date, priority, module_status)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO task_items (life_item_id, due_date, priority, module_status)
+                VALUES (%s, %s, %s, %s)
                 """,
                 (
                     life_item_id,
-                    side_table_data.get("due_window", "this_week"),
                     side_table_data.get("due_date"),
                     side_table_data.get("priority"),
                     side_table_data.get("module_status"),
