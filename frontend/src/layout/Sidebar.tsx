@@ -65,8 +65,8 @@ export function Sidebar({ enabledModules }: { enabledModules: ModuleInstanceItem
   }
 
   return (
-    <aside className="sticky top-12 flex h-[calc(100vh-3rem)] shrink-0 flex-col self-start border-r border-gray-200 bg-white/70 px-3 py-4 dark:border-gray-800 dark:bg-gray-900/35 lg:px-4">
-      <div className="mb-4 flex items-center rounded-lg bg-gray-100 p-0.5 dark:bg-gray-800">
+    <aside className="glass sticky top-12 flex h-[calc(100vh-3rem)] shrink-0 flex-col self-start border-r border-hairline px-3 py-4 lg:px-4">
+      <div className="mb-4 flex items-center rounded-lg bg-surface-inset p-0.5">
         {(['chat', 'modules'] as const).map((value) => {
           const active = tab === value
           return (
@@ -79,11 +79,11 @@ export function Sidebar({ enabledModules }: { enabledModules: ModuleInstanceItem
               {active && (
                 <motion.div
                   layoutId="sidebar-tab-bg"
-                  className="absolute inset-0 rounded-md bg-white shadow-sm dark:bg-gray-700"
+                  className="absolute inset-0 rounded-md bg-surface shadow-sm"
                   transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
                 />
               )}
-              <span className={`relative z-10 ${active ? 'text-gray-900 dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}>
+              <span className={`relative z-10 ${active ? 'text-fg' : 'text-fg-secondary'}`}>
                 {value === 'chat' ? 'Chat' : 'Modules'}
               </span>
             </button>
@@ -95,7 +95,7 @@ export function Sidebar({ enabledModules }: { enabledModules: ModuleInstanceItem
         {tab === 'chat' ? <ChatPane onNewChat={handleNewChat} /> : <ModulesPane orderedModules={orderedModules} />}
       </div>
 
-      <div className="mt-2 border-t border-gray-100 pt-2 dark:border-gray-800">
+      <div className="mt-2 border-t border-hairline pt-2">
         <ProfileMenu />
       </div>
     </aside>
@@ -154,20 +154,20 @@ function ChatPane({ onNewChat }: { onNewChat: () => void }) {
       <button
         type="button"
         onClick={onNewChat}
-        className="flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+        className="flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium text-fg-secondary transition-colors hover:bg-surface-inset"
       >
         <Plus size={15} />
         New chat
       </button>
-      <p className="mt-5 px-3 text-[11px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500">
+      <p className="mt-5 px-3 text-[11px] font-medium uppercase tracking-wider text-fg-tertiary">
         Recents
       </p>
       {loading ? (
-        <p className="px-3 py-1.5 text-[12px] text-gray-400 dark:text-gray-500">Loading…</p>
+        <p className="px-3 py-1.5 text-[12px] text-fg-tertiary">Loading…</p>
       ) : loadError ? (
-        <p className="px-3 py-1.5 text-[12px] text-red-500">{loadError}</p>
+        <p className="px-3 py-1.5 text-[12px] text-danger">{loadError}</p>
       ) : sessions.length === 0 ? (
-        <p className="px-3 py-1.5 text-[12px] text-gray-400 dark:text-gray-500">
+        <p className="px-3 py-1.5 text-[12px] text-fg-tertiary">
           Past conversations will appear here.
         </p>
       ) : (
@@ -239,15 +239,15 @@ function RecentRow({
 
   if (confirmingDelete) {
     return (
-      <div className="flex items-center justify-between gap-1 rounded-lg bg-red-50 px-2 py-1.5 dark:bg-red-950/30">
-        <span className="truncate text-[12px] text-red-700 dark:text-red-200">Delete?</span>
+      <div className="flex items-center justify-between gap-1 rounded-lg bg-danger/10 px-2 py-1.5">
+        <span className="truncate text-[12px] text-danger">Delete?</span>
         <div className="flex items-center gap-0.5">
           <button
             type="button"
             disabled={busy}
             onClick={commitDelete}
             aria-label="Confirm delete"
-            className="rounded-md p-1 text-red-600 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/40"
+            className="rounded-md p-1 text-danger hover:bg-danger/15"
           >
             <Check size={12} />
           </button>
@@ -255,7 +255,7 @@ function RecentRow({
             type="button"
             onClick={() => setConfirmingDelete(false)}
             aria-label="Cancel delete"
-            className="rounded-md p-1 text-red-500 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/40"
+            className="rounded-md p-1 text-danger hover:bg-danger/15"
           >
             <X size={12} />
           </button>
@@ -266,7 +266,7 @@ function RecentRow({
 
   if (renaming) {
     return (
-      <div className="rounded-lg bg-gray-100 px-2 py-1 dark:bg-gray-800">
+      <div className="rounded-lg bg-surface-inset px-2 py-1">
         <input
           autoFocus
           value={titleDraft}
@@ -279,7 +279,7 @@ function RecentRow({
               setRenaming(false)
             }
           }}
-          className="w-full bg-transparent text-[13px] text-gray-900 outline-none dark:text-gray-100"
+          className="w-full bg-transparent text-[13px] text-fg outline-none"
         />
       </div>
     )
@@ -288,19 +288,19 @@ function RecentRow({
   const displayTitle = session.title?.trim() || 'Untitled chat'
   const rowClasses = `group flex w-full items-center gap-1 rounded-lg px-2 py-1.5 transition-colors ${
     isActive
-      ? 'bg-gray-100 dark:bg-gray-800'
-      : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+      ? 'bg-surface-inset'
+      : 'hover:bg-surface-inset'
   }`
   const linkClasses = `flex min-w-0 flex-1 items-center gap-2 text-left text-[13px] transition-colors ${
     isActive
-      ? 'text-gray-900 dark:text-gray-100'
-      : 'text-gray-600 group-hover:text-gray-900 dark:text-gray-400 dark:group-hover:text-gray-200'
+      ? 'text-fg'
+      : 'text-fg-secondary group-hover:text-fg'
   }`
 
   return (
     <div className={rowClasses}>
       <NavLink to={`/chat?session=${encodeURIComponent(session.id)}`} className={linkClasses}>
-        <MessageCircle size={13} className="shrink-0 text-gray-400" />
+        <MessageCircle size={13} className="shrink-0 text-fg-tertiary" />
         <span className="min-w-0 flex-1 truncate">{displayTitle}</span>
       </NavLink>
       <div className="flex shrink-0 items-center gap-0.5">
@@ -312,7 +312,7 @@ function RecentRow({
             setRenaming(true)
           }}
           aria-label={`Rename ${displayTitle}`}
-          className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:bg-gray-200 focus-visible:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-gray-200 dark:focus-visible:bg-gray-700 dark:focus-visible:text-gray-200"
+          className="rounded-md p-1 text-fg-tertiary transition-colors hover:bg-surface-inset hover:text-fg-secondary focus-visible:bg-surface-inset focus-visible:text-fg-secondary"
         >
           <Pencil size={11} />
         </button>
@@ -324,7 +324,7 @@ function RecentRow({
             setConfirmingDelete(true)
           }}
           aria-label={`Delete ${displayTitle}`}
-          className="rounded-md p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500 focus-visible:bg-red-50 focus-visible:text-red-500 dark:hover:bg-red-950/30 dark:hover:text-red-300 dark:focus-visible:bg-red-950/30 dark:focus-visible:text-red-300"
+          className="rounded-md p-1 text-fg-tertiary transition-colors hover:bg-danger/10 hover:text-danger focus-visible:bg-danger/10 focus-visible:text-danger"
         >
           <Trash2 size={11} />
         </button>
@@ -343,8 +343,8 @@ function ModulesPane({ orderedModules }: { orderedModules: ModuleInstanceItem[] 
           className={({ isActive }) =>
             `flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors ${
               isActive
-                ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
-                : 'text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200'
+                ? 'bg-surface-inset text-fg'
+                : 'text-fg-secondary hover:bg-surface-inset hover:text-fg'
             }`
           }
         >
@@ -352,14 +352,14 @@ function ModulesPane({ orderedModules }: { orderedModules: ModuleInstanceItem[] 
           <span className="truncate">{item.module_name}</span>
         </NavLink>
       ))}
-      <div className="mt-3 border-t border-gray-100 pt-3 dark:border-gray-800">
+      <div className="mt-3 border-t border-hairline pt-3">
         <NavLink
           to="/modules"
           className={({ isActive }) =>
             `flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors ${
               isActive
-                ? 'bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
-                : 'text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200'
+                ? 'bg-surface-inset text-fg'
+                : 'text-fg-secondary hover:bg-surface-inset hover:text-fg'
             }`
           }
         >
