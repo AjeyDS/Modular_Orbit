@@ -61,8 +61,8 @@ function AppContent() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-gray-50 font-sans text-gray-900 selection:bg-[#4A9EFF]/30 dark:bg-gray-950 dark:text-gray-100">
-      <nav className="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-md transition-[border-color,background-color] duration-200 ease-out dark:border-gray-800 dark:bg-gray-900/80">
+    <div className="min-h-screen bg-bg font-sans text-fg selection:bg-accent/30">
+      <nav className="glass sticky top-0 z-50 border-b border-hairline transition-[border-color,background-color] duration-200 ease-out">
         <div className="flex h-12 w-full items-center justify-between px-6">
           <div className="flex min-w-0 items-center gap-2.5">
             <img
@@ -70,8 +70,8 @@ function AppContent() {
               alt="Orbit logo"
               className="h-[22px] w-auto object-contain transition-opacity duration-200 ease-out"
             />
-            <span className="text-lg font-semibold tracking-tight text-gray-900 dark:text-gray-100">Orbit</span>
-            <span className="hidden rounded-full border border-gray-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:border-gray-800 md:inline">
+            <span className="text-lg font-semibold tracking-tight text-fg">Orbit</span>
+            <span className="hidden rounded-full border border-hairline px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-fg-tertiary md:inline">
               Modular
             </span>
           </div>
@@ -83,7 +83,7 @@ function AppContent() {
 
         <main className="min-w-0">
           {error && (
-            <div className="mx-6 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200">
+            <div className="mx-6 mt-4 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
               {error}
             </div>
           )}
