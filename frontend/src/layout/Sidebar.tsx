@@ -7,6 +7,7 @@ import {
   CircleHelp,
   FileText,
   Flame,
+  LayoutGrid,
   ListTodo,
   MessageCircle,
   NotebookTabs,
@@ -363,7 +364,7 @@ function ModulesPane({ orderedModules }: { orderedModules: ModuleInstanceItem[] 
             }`
           }
         >
-          <Boxes size={15} />
+          <LayoutGrid size={15} />
           <span className="truncate">Manage Modules</span>
         </NavLink>
       </div>
