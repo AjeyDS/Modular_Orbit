@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowUp, Settings, Sparkles } from 'lucide-react'
+import { Settings, Sparkles } from 'lucide-react'
 import {
   askCompanionQuestion,
   endCompanionSession,
@@ -14,10 +14,28 @@ import {
   type CompanionState,
   type ModuleInstanceItem,
 } from '../lib/api'
+import {
+  ChatComposer,
+  ChatThread,
+  Chip,
+  GlassPanel,
+  MessageBubble,
+  QuickReplyChips,
+  SegmentedControl,
+} from '../components/ui'
 import { pageContentClass } from '../layout/pageShell'
 
 const CURIOUS_IDLE_WEAVE_MS = 2 * 60 * 1000
 const easeOut = [0.23, 1, 0.32, 1] as const
+
+const personaOptions = [
+  { value: 'warm', label: 'Warm' },
+  { value: 'coach', label: 'Coach' },
+  { value: 'gentle', label: 'Gentle' },
+  { value: 'direct', label: 'Direct' },
+] as const
+
+type PersonaPreset = (typeof personaOptions)[number]['value']
 
 type QuickReply = { id?: string; label: string }
 
@@ -35,7 +53,6 @@ export default function CuriousPage() {
   const pendingWeaveRef = useRef(false)
   const idleTimerRef = useRef<number | null>(null)
   const flushingRef = useRef(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   async function load() {
     setError('')
@@ -52,13 +69,6 @@ export default function CuriousPage() {
   useEffect(() => {
     void load()
   }, [])
-
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`
-  }, [draft])
 
   const clearIdleWeave = useCallback(() => {
     if (idleTimerRef.current !== null) {
@@ -258,24 +268,23 @@ export default function CuriousPage() {
 
   if (!companion) {
     return (
-      <div className="min-h-[calc(100vh-3rem)] bg-gray-50 dark:bg-[#18181A]">
-        <div className={`${pageContentClass} py-8 text-center text-[14px] text-gray-400`}>Loading Curious…</div>
+      <div className="min-h-[calc(100vh-3rem)] bg-bg text-fg">
+        <div className={`${pageContentClass} py-8 text-center text-body text-fg-tertiary`}>Loading Curious…</div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-[calc(100vh-3rem)] bg-gray-50 text-gray-800 dark:bg-[#18181A] dark:text-gray-200">
+    <div className="min-h-[calc(100vh-3rem)] bg-bg text-fg">
       <div className={`${pageContentClass} flex min-h-[calc(100vh-3rem)] flex-col py-7`}>
         <header className="mb-5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-2">
-          <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900 dark:text-gray-100">Curious</h1>
+          <h1 className="text-display font-semibold tracking-[-0.02em] text-fg">Curious</h1>
           <div className="relative flex items-center gap-2">
             <button
               type="button"
               disabled={sending || weaving}
               onClick={() => void askQuestion()}
-              className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-[12px] font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-200 dark:hover:bg-blue-950/50"
-              style={{ borderWidth: '0.5px' }}
+              className="rounded-control border border-accent/30 bg-accent/10 px-3 py-1.5 text-label font-medium text-accent transition-colors hover:bg-accent/15 disabled:opacity-50"
             >
               Ask me something
             </button>
@@ -283,8 +292,7 @@ export default function CuriousPage() {
               type="button"
               disabled={weaving}
               onClick={() => void endAndClearThread()}
-              className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[12px] font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200 dark:hover:bg-emerald-950/50"
-              style={{ borderWidth: '0.5px' }}
+              className="rounded-control border border-hairline bg-surface px-3 py-1.5 text-label font-medium text-fg-secondary transition-colors hover:text-fg disabled:opacity-50"
             >
               {weaving ? 'Updating…' : 'Done'}
             </button>
@@ -292,7 +300,7 @@ export default function CuriousPage() {
               type="button"
               onClick={() => setSettingsOpen((open) => !open)}
               aria-label="Curious settings"
-              className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              className="rounded-control p-1.5 text-fg-tertiary transition-colors hover:text-fg"
             >
               <Settings size={15} />
             </button>
@@ -307,17 +315,17 @@ export default function CuriousPage() {
         </header>
 
         {error && (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200">
+          <div className="mb-3 rounded-control border border-danger/30 bg-danger/10 px-4 py-3 text-label text-danger">
             {error}
           </div>
         )}
         {status && !error && (
-          <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200">
+          <div className="mb-3 rounded-control border border-success/30 bg-success/10 px-4 py-3 text-label text-success">
             {status}
           </div>
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col gap-5">
+        <div className="flex min-h-0 flex-1 flex-col">
           {companion.pending_checkin && (
             <PendingCheckinGreeting
               message={companion.pending_checkin}
@@ -325,54 +333,51 @@ export default function CuriousPage() {
             />
           )}
 
-          <section
-            className="flex min-h-[20rem] flex-1 flex-col rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-[#1C1C1E]"
-            style={{ borderWidth: '0.5px' }}
-          >
-            <CompanionThread
-              messages={threadMessages}
-              onQuickReply={(label) => void sendMessage(label)}
-              onSkip={(bucketKey) => void skipQuestion(bucketKey)}
-              onTalkLater={() => void talkLater()}
-            />
-            <div className="border-t border-gray-100 p-3 dark:border-gray-800">
-              <div
-                className="relative rounded-2xl border border-gray-200 bg-white shadow-sm transition-colors focus-within:border-gray-300 dark:border-gray-700 dark:bg-[#1E1E20] dark:focus-within:border-gray-600"
-                style={{ borderWidth: '0.5px' }}
-              >
-                <textarea
-                  ref={textareaRef}
-                  value={draft}
-                  rows={1}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault()
-                      void sendMessage(draft)
-                    }
-                  }}
-                  placeholder="Share an update or answer…"
-                  className="w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-[14px] leading-6 text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
-                  style={{ maxHeight: '140px', minHeight: '2.75rem' }}
-                />
-                <div className="flex items-center justify-end px-3 pb-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => void sendMessage(draft)}
-                    disabled={!draft.trim() || sending}
-                    aria-label="Send"
-                    className={`rounded-lg p-1.5 transition-[color,transform,background-color] duration-150 ease-out ${
-                      draft.trim()
-                        ? 'bg-blue-500 text-white hover:bg-blue-600 active:scale-[0.97]'
-                        : 'cursor-default bg-gray-100 text-gray-300 dark:bg-gray-800 dark:text-gray-600'
-                    }`}
-                  >
-                    <ArrowUp size={16} />
-                  </button>
+          <ChatThread
+            scrollKey={threadMessages.length}
+            isEmpty={threadMessages.length === 0}
+            empty={
+              <div className="px-6 py-12 text-center">
+                <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-control bg-surface-inset text-accent">
+                  <Sparkles size={18} />
                 </div>
+                <h3 className="text-body font-medium text-fg">Your companion is listening</h3>
+                <p className="mx-auto mt-1 max-w-sm text-caption leading-6 text-fg-secondary">
+                  Share an update, answer a question, or just say what&apos;s on your mind.
+                </p>
               </div>
-            </div>
-          </section>
+            }
+          >
+            {threadMessages.map((message) => (
+              <MessageBubble key={message.id} role={message.role === 'user' ? 'user' : 'assistant'}>
+                <p className="whitespace-pre-wrap">{message.content}</p>
+                {message.role === 'assistant' && (
+                  <>
+                    {parseMessageKind(message.meta) === 'question' && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Chip onClick={() => void skipQuestion(readBucketKey(message.meta))}>Skip</Chip>
+                        <Chip onClick={() => void talkLater()}>Talk later</Chip>
+                      </div>
+                    )}
+                    <QuickReplyChips
+                      replies={parseQuickReplies(message.meta)}
+                      onSelect={(label) => void sendMessage(label)}
+                    />
+                  </>
+                )}
+              </MessageBubble>
+            ))}
+          </ChatThread>
+
+          <div className="shrink-0 border-t border-hairline pt-3">
+            <ChatComposer
+              value={draft}
+              onChange={setDraft}
+              onSend={() => void sendMessage(draft)}
+              placeholder="Share an update or answer…"
+              sending={sending}
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -392,118 +397,12 @@ function PendingCheckinGreeting({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease: easeOut }}
-      className="rounded-2xl border border-violet-200 bg-violet-50/70 p-5 shadow-sm dark:border-violet-900/50 dark:bg-violet-950/20"
-      style={{ borderWidth: '0.5px' }}
+      className="mb-4 rounded-card border border-accent/20 ai-wash p-5"
     >
-      <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.14em] text-violet-500 dark:text-violet-300">
-        Check-in
-      </p>
-      <p className="text-[15px] leading-7 text-gray-800 dark:text-gray-100">{message.content}</p>
+      <p className="mb-1 text-caption uppercase tracking-wide text-accent">Check-in</p>
+      <p className="text-body leading-7 text-fg">{message.content}</p>
       <QuickReplyChips replies={quickReplies} onSelect={onQuickReply} />
     </motion.div>
-  )
-}
-
-function CompanionThread({
-  messages,
-  onQuickReply,
-  onSkip,
-  onTalkLater,
-}: {
-  messages: CompanionMessageItem[]
-  onQuickReply: (label: string) => void
-  onSkip: (bucketKey?: string | null) => void
-  onTalkLater: () => void
-}) {
-  const bottomRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  if (messages.length === 0) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
-        <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-500 dark:bg-blue-950/40 dark:text-blue-300">
-          <Sparkles size={18} />
-        </div>
-        <h3 className="text-[15px] font-medium text-gray-800 dark:text-gray-200">Your companion is listening</h3>
-        <p className="mx-auto mt-1 max-w-sm text-[13px] leading-6 text-gray-500 dark:text-gray-500">
-          Share an update, answer a question, or just say what&apos;s on your mind.
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
-      {messages.map((message) => (
-        <article
-          key={message.id}
-          className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
-        >
-          <div
-            className={`max-w-[min(85%,42rem)] px-4 py-3 text-[14px] leading-7 ${
-              message.role === 'user'
-                ? 'rounded-2xl rounded-br-sm bg-blue-500 text-white'
-                : 'rounded-2xl rounded-bl-sm bg-gray-50 text-gray-800 dark:bg-gray-800/30 dark:text-gray-200'
-            }`}
-          >
-            <p className="whitespace-pre-wrap">{message.content}</p>
-            {message.role === 'assistant' && (
-              <>
-                {parseMessageKind(message.meta) === 'question' && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <LifecycleChip label="Skip" onClick={() => onSkip(readBucketKey(message.meta))} />
-                    <LifecycleChip label="Talk later" onClick={onTalkLater} />
-                  </div>
-                )}
-                <QuickReplyChips replies={parseQuickReplies(message.meta)} onSelect={onQuickReply} />
-              </>
-            )}
-          </div>
-        </article>
-      ))}
-      <div ref={bottomRef} />
-    </div>
-  )
-}
-
-function LifecycleChip({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[12px] text-gray-600 transition-colors hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#1C1C1E] dark:text-gray-400 dark:hover:border-gray-600"
-      style={{ borderWidth: '0.5px' }}
-    >
-      {label}
-    </button>
-  )
-}
-
-function QuickReplyChips({
-  replies,
-  onSelect,
-}: {
-  replies: QuickReply[]
-  onSelect: (label: string) => void
-}) {
-  if (replies.length === 0) return null
-  return (
-    <div className="mt-3 flex flex-wrap gap-2">
-      {replies.map((reply) => (
-        <button
-          key={reply.id ?? reply.label}
-          type="button"
-          onClick={() => onSelect(reply.label)}
-          className="rounded-full border border-gray-200 bg-white px-3 py-1 text-[12px] text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:bg-[#1C1C1E] dark:text-gray-300 dark:hover:border-gray-600"
-          style={{ borderWidth: '0.5px' }}
-        >
-          {reply.label}
-        </button>
-      ))}
-    </div>
   )
 }
 
@@ -520,8 +419,11 @@ function CuriousSettingsPopover({
   const notify = settings.notify_questions_enabled !== false
   const paused = settings.curious_paused === true
   const maxWeekly = typeof settings.max_new_questions_per_week === 'number' ? settings.max_new_questions_per_week : 3
-  const personaPreset =
-    typeof settings.companion_persona_preset === 'string' ? settings.companion_persona_preset : 'warm'
+  const personaPreset: PersonaPreset =
+    typeof settings.companion_persona_preset === 'string' &&
+    personaOptions.some((option) => option.value === settings.companion_persona_preset)
+      ? (settings.companion_persona_preset as PersonaPreset)
+      : 'warm'
   const personaOverride =
     typeof settings.companion_persona_override === 'string' ? settings.companion_persona_override : ''
   const checkinsPerDay =
@@ -543,98 +445,98 @@ function CuriousSettingsPopover({
   }, [onClose])
 
   return (
-    <div
-      ref={containerRef}
-      role="menu"
-      className="absolute right-0 top-full z-20 mt-2 w-[20rem] rounded-xl border border-gray-200 bg-white p-4 shadow-xl dark:border-gray-800 dark:bg-[#1C1C1E]"
-      style={{ borderWidth: '0.5px' }}
-    >
-      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-gray-400">Curious settings</p>
-      <div className="mt-4 space-y-4">
-        <label className="grid gap-2">
-          <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200">Companion persona</span>
-          <select
-            value={personaPreset}
-            onChange={(event) => onChange({ companion_persona_preset: event.target.value })}
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-[13px] text-gray-800 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-200"
-            style={{ borderWidth: '0.5px' }}
-          >
-            <option value="warm">Warm</option>
-            <option value="coach">Coach</option>
-            <option value="gentle">Gentle</option>
-            <option value="direct">Direct</option>
-          </select>
-        </label>
+    <div ref={containerRef}>
+      <GlassPanel elevated role="menu" className="absolute right-0 top-full z-20 mt-2 w-[20rem] p-4">
+        <p className="text-caption uppercase tracking-wide text-fg-tertiary">Curious settings</p>
+        <div className="mt-4 space-y-4">
+          <div className="grid gap-2">
+            <span className="text-label font-medium text-fg">Companion persona</span>
+            <SegmentedControl
+              options={personaOptions.map((option) => ({ value: option.value, label: option.label }))}
+              value={personaPreset}
+              onChange={(value) => onChange({ companion_persona_preset: value })}
+              size="sm"
+              ariaLabel="Companion persona"
+            />
+          </div>
 
-        <label className="grid gap-2">
-          <span className="text-[13px] font-medium text-gray-800 dark:text-gray-200">Persona override</span>
-          <textarea
-            value={personaOverride}
-            onChange={(event) => onChange({ companion_persona_override: event.target.value })}
-            rows={3}
-            placeholder="Optional instructions for your companion…"
-            className="resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-[13px] text-gray-800 outline-none placeholder:text-gray-400 dark:border-gray-700 dark:bg-[#1E1E20] dark:text-gray-200"
-            style={{ borderWidth: '0.5px' }}
-          />
-        </label>
+          <label className="grid gap-2">
+            <span className="text-label font-medium text-fg">Persona override</span>
+            <textarea
+              value={personaOverride}
+              onChange={(event) => onChange({ companion_persona_override: event.target.value })}
+              rows={3}
+              placeholder="Optional instructions for your companion…"
+              className="resize-none rounded-control border border-hairline bg-surface px-3 py-2 text-label text-fg outline-none transition-colors placeholder:text-fg-tertiary focus:border-hairline-strong"
+            />
+          </label>
 
-        <label className="grid gap-2">
-          <span className="flex items-center justify-between text-[13px] font-medium text-gray-800 dark:text-gray-200">
-            <span>Check-ins per day</span>
-            <span className="text-gray-400">{checkinsPerDay === 0 ? 'Off' : checkinsPerDay}</span>
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={6}
-            value={checkinsPerDay}
-            onChange={(event) => onChange({ companion_checkins_per_day: Number(event.target.value) })}
-            className="w-full accent-violet-500"
-          />
-          <span className="text-[12px] leading-5 text-gray-400">0 turns proactive check-ins off.</span>
-        </label>
+          <label className="grid gap-2">
+            <span className="flex items-center justify-between text-label font-medium text-fg">
+              <span>Check-ins per day</span>
+              <span className="text-fg-tertiary">{checkinsPerDay === 0 ? 'Off' : checkinsPerDay}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={6}
+              value={checkinsPerDay}
+              onChange={(event) => onChange({ companion_checkins_per_day: Number(event.target.value) })}
+              className="w-full"
+              style={{ accentColor: 'var(--accent)' }}
+            />
+            <span className="text-caption leading-5 text-fg-tertiary">0 turns proactive check-ins off.</span>
+          </label>
 
-        <label className="flex items-start justify-between gap-4">
-          <span>
-            <span className="block text-[13px] font-medium text-gray-800 dark:text-gray-200">Notify me when new questions appear</span>
-            <span className="mt-0.5 block text-[12px] leading-5 text-gray-400">Default on. For future dynamic questions.</span>
-          </span>
-          <input
-            type="checkbox"
-            checked={notify}
-            onChange={(event) => onChange({ notify_questions_enabled: event.target.checked })}
-            className="mt-1 h-4 w-4 accent-blue-500"
-          />
-        </label>
+          <label className="flex items-start justify-between gap-4">
+            <span>
+              <span className="block text-label font-medium text-fg">Notify me when new questions appear</span>
+              <span className="mt-0.5 block text-caption leading-5 text-fg-tertiary">
+                Default on. For future dynamic questions.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={notify}
+              onChange={(event) => onChange({ notify_questions_enabled: event.target.checked })}
+              className="mt-1 h-4 w-4"
+              style={{ accentColor: 'var(--accent)' }}
+            />
+          </label>
 
-        <label className="grid gap-2">
-          <span className="flex items-center justify-between text-[13px] font-medium text-gray-800 dark:text-gray-200">
-            <span>Max new questions per week</span>
-            <span className="text-gray-400">{maxWeekly}</span>
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={10}
-            value={maxWeekly}
-            onChange={(event) => onChange({ max_new_questions_per_week: Number(event.target.value) })}
-            className="w-full accent-blue-500"
-          />
-        </label>
+          <label className="grid gap-2">
+            <span className="flex items-center justify-between text-label font-medium text-fg">
+              <span>Max new questions per week</span>
+              <span className="text-fg-tertiary">{maxWeekly}</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={10}
+              value={maxWeekly}
+              onChange={(event) => onChange({ max_new_questions_per_week: Number(event.target.value) })}
+              className="w-full"
+              style={{ accentColor: 'var(--accent)' }}
+            />
+          </label>
 
-        <label className="flex items-start justify-between gap-4">
-          <span>
-            <span className="block text-[13px] font-medium text-gray-800 dark:text-gray-200">Pause Curious</span>
-            <span className="mt-0.5 block text-[12px] leading-5 text-gray-400">Stops future dynamic generation. Pending questions stay available.</span>
-          </span>
-          <input
-            type="checkbox"
-            checked={paused}
-            onChange={(event) => onChange({ curious_paused: event.target.checked })}
-            className="mt-1 h-4 w-4 accent-blue-500"
-          />
-        </label>
-      </div>
+          <label className="flex items-start justify-between gap-4">
+            <span>
+              <span className="block text-label font-medium text-fg">Pause Curious</span>
+              <span className="mt-0.5 block text-caption leading-5 text-fg-tertiary">
+                Stops future dynamic generation. Pending questions stay available.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={paused}
+              onChange={(event) => onChange({ curious_paused: event.target.checked })}
+              className="mt-1 h-4 w-4"
+              style={{ accentColor: 'var(--accent)' }}
+            />
+          </label>
+        </div>
+      </GlassPanel>
     </div>
   )
 }
@@ -663,4 +565,3 @@ function parseQuickReplies(meta: Record<string, unknown>): QuickReply[] {
     })
     .filter((item): item is QuickReply => item !== null)
 }
-
