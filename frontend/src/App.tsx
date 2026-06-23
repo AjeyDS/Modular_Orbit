@@ -22,11 +22,14 @@ import TasksPage from './pages/TasksPage'
 import UserModelPage from './pages/UserModelPage'
 import { Sidebar } from './layout/Sidebar'
 import { ThemeProvider, useTheme } from './layout/useTheme'
+import { ToastProvider } from './components/ui'
 
 function App() {
   return (
     <ThemeProvider>
-      <AppContent />
+      <ToastProvider>
+        <AppContent />
+      </ToastProvider>
     </ThemeProvider>
   )
 }
