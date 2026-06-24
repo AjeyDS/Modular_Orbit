@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections.abc import Iterator
 from typing import Any
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from app.core.config import settings
@@ -20,6 +22,40 @@ from app.core.config import settings
 
 class LLMUnavailable(RuntimeError):
     """Raised when a model call is intentionally disabled or unavailable."""
+
+
+# Gemini occasionally returns transient errors — 503 "model is overloaded" spikes
+# (common on flash-lite) and 429 rate limits. These are retryable; without a retry
+# a momentary 503 immediately degrades chat to the no-LLM fallback. Retry a couple
+# of times with a short exponential backoff before giving up.
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 0.6
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Whether a model-call exception is worth retrying."""
+    if isinstance(exc, genai_errors.ServerError):
+        return True  # 5xx incl. 503 UNAVAILABLE / overloaded
+    if isinstance(exc, genai_errors.ClientError):
+        return getattr(exc, "code", None) == 429  # rate limited
+    return False
+
+
+def _retry_delay(attempt: int) -> float:
+    return _RETRY_BASE_DELAY * (2**attempt)
+
+
+def _generate_content_with_retry(client: genai.Client, **kwargs: Any):
+    """Run a non-streaming generate_content, retrying transient errors."""
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return client.models.generate_content(**kwargs)
+        except Exception as exc:
+            if _is_transient(exc) and attempt < _RETRY_ATTEMPTS - 1:
+                time.sleep(_retry_delay(attempt))
+                continue
+            raise
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 def llm_enabled() -> bool:
@@ -45,7 +81,8 @@ def generate_text(
         raise LLMUnavailable("LLM calls are disabled")
 
     client = genai.Client(api_key=settings.gemini_api_key)
-    response = client.models.generate_content(
+    response = _generate_content_with_retry(
+        client,
         model=_normalize_model_name(settings.gemini_chat_model),
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -72,19 +109,33 @@ def generate_text_stream(
         raise LLMUnavailable("LLM calls are disabled")
 
     client = genai.Client(api_key=settings.gemini_api_key)
-    stream = client.models.generate_content_stream(
-        model=_normalize_model_name(settings.gemini_chat_model),
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-        ),
+    model = _normalize_model_name(settings.gemini_chat_model)
+    config = types.GenerateContentConfig(
+        system_instruction=system,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
     )
-    for chunk in stream:
-        text = getattr(chunk, "text", None)
-        if text:
-            yield text
+    for attempt in range(_RETRY_ATTEMPTS):
+        yielded = False
+        try:
+            stream = client.models.generate_content_stream(
+                model=model,
+                contents=prompt,
+                config=config,
+            )
+            for chunk in stream:
+                text = getattr(chunk, "text", None)
+                if text:
+                    yielded = True
+                    yield text
+            return
+        except Exception as exc:
+            # Only safe to retry if nothing has been streamed to the caller yet —
+            # otherwise a retry would duplicate already-emitted text.
+            if _is_transient(exc) and not yielded and attempt < _RETRY_ATTEMPTS - 1:
+                time.sleep(_retry_delay(attempt))
+                continue
+            raise
 
 
 def generate_json(
@@ -99,7 +150,8 @@ def generate_json(
         raise LLMUnavailable("LLM calls are disabled")
 
     client = genai.Client(api_key=settings.gemini_api_key)
-    response = client.models.generate_content(
+    response = _generate_content_with_retry(
+        client,
         model=_normalize_model_name(settings.gemini_json_model),
         contents=prompt,
         config=types.GenerateContentConfig(
